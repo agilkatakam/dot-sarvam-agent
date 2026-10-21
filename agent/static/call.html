@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DOT Test Call</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1c1c1a; --muted:#6b6a65; --accent:#1f6f4a; --danger:#b3261e; --line:#e4e2dc; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151514; --card:#1f1f1d; --ink:#ecebe7; --muted:#9a9891; --accent:#4fb487; --danger:#ef6b62; --line:#2e2e2b; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:560px; margin:0 auto; padding:32px 16px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 24px; font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  button { width:100%; border:0; border-radius:999px; padding:16px; font-size:17px; font-weight:600; cursor:pointer; color:#fff; background:var(--accent); }
+  button.hang { background:var(--danger); }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { margin:14px 0 0; text-align:center; color:var(--muted); font-size:14px; min-height:21px; }
+  .meter { height:6px; background:var(--line); border-radius:3px; margin-top:12px; overflow:hidden; }
+  .meter i { display:block; height:100%; width:0; background:var(--accent); transition:width .08s; }
+  #log { margin-top:18px; display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow-y:auto; }
+  .msg { padding:8px 12px; border-radius:12px; font-size:15px; max-width:88%; }
+  .agent { background:var(--line); align-self:flex-start; }
+  .user { background:var(--accent); color:#fff; align-self:flex-end; }
+  .filler { opacity:.6; font-style:italic; }
+  .hint { color:var(--muted); font-size:13px; margin-top:18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Talk to the DOT voice agent</h1>
+  <p class="sub">A test call with an AI assistant. Pretend you're a college receptionist, placement head, dean or librarian.</p>
+  <div class="card">
+    <button id="btn">Start call</button>
+    <div class="meter"><i id="lvl"></i></div>
+    <div id="status">Ready</div>
+    <div id="log"></div>
+  </div>
+  <p class="hint" id="ref"></p>
+  <p class="hint">Uses your microphone. Headphones give the best results. Calls are recorded for quality review.</p>
+</main>
+<script>
+const RATE = 16000;
+const btn = document.getElementById('btn'), statusEl = document.getElementById('status'),
+      logEl = document.getElementById('log'), lvl = document.getElementById('lvl');
+let ws, ctx, stream, player, mic, ending = false;
+
+const WORKLETS = `
+class Mic extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(320); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0][0]; if (!ch) return true;
+    let peak = 0;
+    for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i])); peak = Math.max(peak, Math.abs(s));
+      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (this.n === this.buf.length) { this.port.postMessage({pcm: this.buf.buffer.slice(0), peak}); this.n = 0; }
+    }
+    return true;
+  }
+}
+class Player extends AudioWorkletProcessor {
+  constructor() {
+    super(); this.q = []; this.cur = null; this.pos = 0;
+    this.port.onmessage = e => {
+      if (e.data === 'clear') { this.q = []; this.cur = null; return; }
+      const i16 = new Int16Array(e.data), f = new Float32Array(i16.length);
+      for (let i = 0; i < i16.length; i++) f[i] = i16[i] / 0x8000;
+      this.q.push(f);
+    };
+  }
+  process(_, outputs) {
+    const out = outputs[0][0];
+    for (let i = 0; i < out.length; i++) {
+      if (!this.cur || this.pos >= this.cur.length) { this.cur = this.q.shift() || null; this.pos = 0; }
+      out[i] = this.cur ? this.cur[this.pos++] : 0;
+    }
+    this.port.postMessage(this.q.length + (this.cur ? 1 : 0));
+    return true;
+  }
+}
+registerProcessor('mic', Mic); registerProcessor('player', Player);`;
+
+function say(role, text) {
+  const filler = text.endsWith(' [filler]');
+  const d = document.createElement('div'); d.className = 'msg ' + role + (filler ? ' filler' : ''); d.textContent = filler ? text.slice(0, -9) : text;
+  logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+}
+function setStatus(t) { statusEl.textContent = t; }
+
+async function start() {
+  btn.disabled = true; logEl.innerHTML = ''; ending = false; setStatus('Connecting…');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1}});
+  } catch (e) { setStatus('Microphone permission is needed to call.'); btn.disabled = false; return; }
+  ctx = new AudioContext({sampleRate: RATE});
+  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLETS], {type: 'application/javascript'})));
+  player = new AudioWorkletNode(ctx, 'player'); player.connect(ctx.destination);
+  let queued = 0; player.port.onmessage = e => { queued = e.data; if (ending && queued === 0) hangUp('Call ended by agent'); };
+  mic = new AudioWorkletNode(ctx, 'mic'); ctx.createMediaStreamSource(stream).connect(mic);
+
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/browser');
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    setStatus('Connected — the agent will speak first');
+    btn.textContent = 'Hang up'; btn.className = 'hang'; btn.disabled = false;
+    mic.port.onmessage = e => { if (ws.readyState === 1) ws.send(e.data.pcm); lvl.style.width = Math.min(100, e.data.peak * 140) + '%'; };
+  };
+  ws.onmessage = e => {
+    if (typeof e.data !== 'string') { player.port.postMessage(e.data, [e.data]); return; }
+    const m = JSON.parse(e.data);
+    if (m.type === 'clear') player.port.postMessage('clear');
+    else if (m.type === 'caption') say(m.role, m.text);
+    else if (m.type === 'call') document.getElementById('ref').textContent = 'Call reference: ' + m.id.slice(0, 8) + ' (quote this when giving feedback)';
+    else if (m.type === 'end') { ending = true; setStatus('Agent is wrapping up…'); if (queued === 0) setTimeout(() => hangUp('Call ended by agent'), 400); }
+    else if (m.type === 'error') { setStatus(m.text); }
+  };
+  ws.onclose = () => { if (!ending) hangUp(statusEl.textContent.startsWith('Connected') ? 'Call ended' : statusEl.textContent); else if (queued === 0) hangUp('Call ended by agent'); };
+}
+
+function hangUp(msg) {
+  if (ws && ws.readyState <= 1) ws.close();
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx && ctx.state !== 'closed') ctx.close();
+  ws = ctx = stream = null; lvl.style.width = '0';
+  btn.textContent = 'Start call'; btn.className = ''; btn.disabled = false; setStatus(msg || 'Call ended');
+}
+
+btn.onclick = () => (ws ? hangUp('You hung up') : start());
+</script>
+</body>
+</html>

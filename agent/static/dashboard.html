@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice agent: KPIs</title>
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js"></script>
+</head>
+<body>
+<main>
+  <div class="toolbar" style="justify-content:space-between">
+    <div><h1>Test call KPIs</h1><div class="muted" id="sample">Loading…</div></div>
+    <div class="toolbar">
+      <select id="fversion" style="width:auto"><option value="">All prompt versions</option></select>
+      <select id="fchannel" style="width:auto">
+        <option value="">All channels</option><option value="browser">Browser</option><option value="phone">Phone</option><option value="simulated">Simulated</option>
+      </select>
+      <a class="btn ghost" id="csv" href="/api/calls.csv">Export CSV</a>
+    </div>
+  </div>
+
+  <h2>System KPIs <span class="muted">(how well the agent works)</span></h2>
+  <div class="grid" id="kpis"></div>
+
+  <h2>Funnel KPIs <span class="muted">(is it reaching the right people and booking meetings)</span></h2>
+  <div class="grid" id="funnel"></div>
+
+  <h2>Cost <span class="muted">(estimated from metered tokens, characters and minutes, ex-GST)</span></h2>
+  <div class="grid" id="cost"></div>
+
+  <div class="cols" style="margin-top:20px">
+    <div class="card"><h3 style="margin-top:0">Outcomes <span class="muted">(share of finished, connected calls)</span></h3><div id="outcomes"></div></div>
+    <div class="card"><h3 style="margin-top:0">Who answered <span class="muted">(persona)</span></h3><div id="personas"></div></div>
+    <div class="card"><h3 style="margin-top:0">Seriousness</h3><div id="seriousness"></div><div class="small muted" id="confusion"></div></div>
+  </div>
+
+  <h2>By prompt version <span class="muted">(did a prompt edit help?)</span></h2>
+  <div class="table-wrap"><table><thead><tr><th>Version</th><th>Attempts</th><th>Completion</th><th>Meetings</th><th>Reached decision-maker</th><th>Intent accuracy</th><th>Reply p50</th><th>Cost / call</th></tr></thead><tbody id="versions"></tbody></table></div>
+
+  <h2>Calls <span class="muted">(click one to review it)</span></h2>
+  <div class="table-wrap"><table><thead><tr><th>Started</th><th>Channel</th><th>v</th><th>Connected</th><th>Ended by</th><th>Persona</th><th>Seriousness</th><th>Agent outcome</th><th>Final outcome</th><th>Cost</th><th>Reviewed</th></tr></thead><tbody id="calls"></tbody></table></div>
+  <div id="detail" class="card" style="display:none;margin-top:12px"></div>
+</main>
+<script>
+nav('/dashboard');
+const OUTCOMES = ['abandoned','polite_decline','meeting_booked','call_again_later','initial_discussion','other'];
+const SERIOUS = ['genuine','gatekeeper','time_waster','unclear'];
+let personaTags = [];
+function tile(label, value, note, cls='') { return `<div class="tile"><small>${label}</small><b class="${cls}">${value}</b><small>${note}</small></div>`; }
+function bars(obj, total) {
+  const entries = Object.entries(obj).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return '<span class="muted">No calls yet</span>';
+  return entries.map(([k, n]) => `<div class="row"><span>${esc(k.replaceAll('_',' '))}</span><span class="track"><i style="width:${total ? n / total * 100 : 0}%"></i></span><span>${n} · ${pct(total ? n / total : null)}</span></div>`).join('');
+}
+function query() {
+  const p = new URLSearchParams();
+  if ($('fversion').value) p.set('version', $('fversion').value);
+  if ($('fchannel').value) p.set('channel', $('fchannel').value);
+  const s = p.toString(); return s ? '?' + s : '';
+}
+
+async function load() {
+  const q = query();
+  $('csv').href = '/api/calls.csv' + q;
+  const k = await api('/api/kpis' + q), K = k.kpis, L = K.latency, F = k.funnel, C = k.cost, T = k.targets;
+  $('sample').textContent = `${k.attempts} attempts · ${k.connected} connected · ${k.finished} finished · ${k.errors} errors`;
+  $('kpis').innerHTML = [
+    tile('Connectivity rate', pct(K.connectivity_rate), 'attempts where the caller heard the agent'),
+    tile('Call completion rate', pct(K.call_completion_rate), 'finished calls that reached an outcome'),
+    tile(`Replies ≤ ${T.latency_ms} ms`, pct(L.under_target_rate), `${L.replies_measured} replies · p50 ${ms(L.p50_ms)} · p90 ${ms(L.p90_ms)}`, L.under_target_rate >= .9 ? 'good' : 'bad'),
+    tile(`Replies ≤ ${T.working_latency_ms / 1000} s`, pct(L.under_working_target_rate), `working target · greeting p50 ${ms(L.greeting_p50_ms)}`, L.under_working_target_rate >= .9 ? 'good' : 'warn'),
+    tile('Latency split (avg)', ms(L.avg_stt_ms != null && L.avg_llm_ms != null && L.avg_tts_ms != null ? L.avg_stt_ms + L.avg_llm_ms + L.avg_tts_ms : null), `STT ${ms(L.avg_stt_ms)} · LLM ${ms(L.avg_llm_ms)} · TTS ${ms(L.avg_tts_ms)}`),
+    tile('Speech recognition accuracy', pct(K.stt_accuracy), `1 − WER over ${K.stt_calls_reviewed} corrected calls`),
+    tile('Intent detection accuracy', pct(K.intent_accuracy), `agent vs reviewer on ${K.intent_calls_reviewed} calls`),
+  ].join('');
+  $('funnel').innerHTML = [
+    tile('Meetings per 1,000 dials', F.meetings_per_1000 ?? '—', 'north-star metric', F.meetings_per_1000 > 0 ? 'good' : ''),
+    tile('Reached a decision-maker', pct(F.decision_maker_reach), 'got past reception to a persona'),
+    tile('Persona routing accuracy', pct(F.routing_accuracy), `agent vs reviewer on ${F.routing_calls_reviewed} calls`),
+    tile('Positive intent rate', pct(F.positive_intent_rate), 'interest high or medium'),
+    tile('Callback time captured', pct(F.callback_time_captured), 'of call-again-later outcomes'),
+    tile('Calls with a filler line', pct(F.filler_rate), 'agent had to say "one moment"'),
+    tile('Opted out', F.opted_out, 'added to the do-not-call list'),
+  ].join('');
+  $('cost').innerHTML = [
+    tile('Total spend', inr(C.total_inr), `${k.attempts} calls`),
+    tile('Per call', inr(C.per_call_inr), 'average'),
+    tile('Per connected minute', inr(C.per_connected_minute_inr), 'STT + LLM + TTS'),
+    tile('Per meeting booked', inr(C.per_meeting_inr), 'cost of acquisition'),
+    tile('Spent on time-wasters', inr(C.time_waster_inr), 'joking or abusive calls'),
+  ].join('');
+  $('outcomes').innerHTML = OUTCOMES.map(o => {
+    const v = k.outcomes[o]; return `<div class="row"><span>${o.replaceAll('_',' ')}</span><span class="track"><i style="width:${(v.rate||0)*100}%"></i></span><span>${v.count} · ${pct(v.rate)}</span></div>`;
+  }).join('');
+  $('personas').innerHTML = bars(F.personas, k.finished);
+  $('seriousness').innerHTML = bars(Object.fromEntries(SERIOUS.map(s => [s, F.seriousness[s] || 0])), k.finished);
+  const conf = Object.entries(K.intent_confusion).filter(([pair]) => pair.split(' -> ')[0] !== pair.split(' -> ')[1]);
+  $('confusion').innerHTML = conf.length ? '<b>Intent mistakes</b> (agent → reviewer): ' + conf.map(([p, n]) => `${esc(p)} ×${n}`).join(', ') : '';
+  $('versions').innerHTML = k.by_prompt_version.map(v => `<tr><td>${v.prompt_version ?? '—'}</td><td>${v.attempts}</td><td>${pct(v.completion)}</td><td>${v.meetings}</td><td>${pct(v.decision_maker_reach)}</td><td>${pct(v.intent_accuracy)}</td><td>${ms(v.p50_ms)}</td><td>${inr(v.per_call_inr)}</td></tr>`).join('');
+
+  const calls = await api('/api/calls' + q);
+  $('calls').innerHTML = calls.map(c => `<tr class="click" onclick="openCall('${c.id}')">
+    <td>${new Date(c.started_at).toLocaleString()}</td><td>${c.channel}</td><td>${c.prompt_version ?? ''}</td><td>${c.connected_at ? 'yes' : '<span class="bad">no</span>'}</td>
+    <td>${esc(c.end_reason ?? 'live')}</td><td>${esc(c.reviewed_persona || c.persona || '—')}</td><td>${esc(c.seriousness ?? '—')}</td><td>${esc(c.agent_outcome ?? '—')}</td><td>${esc(c.final_outcome ?? '—')}</td><td>${inr(c.cost_inr)}</td><td>${c.reviewed_at ? '✓' : ''}</td></tr>`).join('');
+}
+
+async function openCall(id) {
+  const c = await api('/api/calls/' + id), d = $('detail');
+  if (!personaTags.length) personaTags = (await api('/api/prompt/preview')).persona_tags;
+  const tags = [...new Set([...personaTags, c.persona].filter(Boolean))];
+  const lat = c.turns.map(t => `${t.kind === 'greeting' ? 'greeting' : 'reply'} ${t.latency_ms}ms`).join(' · ') || 'none';
+  const rt = c.runtime_settings ? `${esc(c.runtime_settings.llm_model)} · voice ${esc(c.runtime_settings.tts_voice)} · turn ${esc(c.runtime_settings.turn_mode)}` : esc(c.llm_model ?? '');
+  const b = c.booking;
+  d.style.display = 'block';
+  d.innerHTML = `<h2 style="margin-top:0">Call ${esc(c.id.slice(0, 8))} <span class="muted">${esc(c.channel)} ${esc(c.caller ?? '')} · prompt v${c.prompt_version ?? '?'} · ${rt}</span></h2>
+    <div class="muted">Contact: ${esc(c.contact_name ?? '—')} (${esc(c.contact_title ?? '—')}) · ${esc(c.institution ?? '')} ${esc(c.contact_email ?? '')}</div>
+    <div class="muted">Persona ${esc(c.persona ?? '—')} · seriousness ${esc(c.seriousness ?? '—')} · interest ${esc(c.interest_level ?? '—')} · next step ${esc(c.next_step ?? '—')}${c.opted_out ? ' · <b class="bad">opted out</b>' : ''} · callback ${esc(c.callback_time ?? '—')}</div>
+    <div class="muted">Meeting: ${b ? `<b>${esc(c.meeting_time)}</b> (${esc(b.backend)}, ${esc(b.status)}) <a href="/api/bookings/${b.id}.ics">.ics</a>${b.meet_link ? ` · <a href="${esc(b.meet_link)}" target="_blank">Meet</a>` : ''}` : '—'}</div>
+    <div class="muted">Summary: ${esc(c.summary ?? '—')}</div>
+    <div class="muted">Latency: ${lat}</div>
+    <div class="muted">Duration ${c.duration_secs ?? '—'} s · ${c.llm_in_tokens ?? 0}+${c.llm_out_tokens ?? 0} tokens · ${c.tts_chars ?? 0} TTS chars · ${inr(c.cost_inr)}${c.filler_count ? ` · ${c.filler_count} filler line(s)` : ''}</div>
+    ${c.error ? `<div class="bad">Error: ${esc(c.error)}</div>` : ''}
+    ${c.recording ? `<audio controls src="/api/recordings/${esc(c.recording)}" style="width:100%;margin:10px 0"></audio>` : ''}
+    <div>${c.transcript.map(m => `<div class="t"><b>${m.role}</b>${esc(m.text)}</div>`).join('') || '<span class="muted">No transcript</span>'}</div>
+    <div class="cols">
+      <div><label>Correct outcome</label>
+      <select id="ro"><option value="">(not reviewed)</option>${OUTCOMES.map(o => `<option ${c.reviewed_outcome === o ? 'selected' : ''}>${o}</option>`).join('')}</select></div>
+      <div><label>Correct persona <span class="muted">(for routing accuracy)</span></label>
+      <select id="rp"><option value="">(not reviewed)</option>${tags.map(o => `<option ${c.reviewed_persona === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>
+    </div>
+    <label>What the caller actually said <span class="muted">(fix the agent's transcript while listening; used for speech accuracy${c.wer != null ? `; current WER ${(c.wer*100).toFixed(1)}%` : ''})</span></label>
+    <textarea id="ct">${esc(c.corrected_user_text ?? c.heard_user_text)}</textarea>
+    <label>Notes</label><textarea id="rn">${esc(c.reviewer_notes ?? '')}</textarea>
+    <button style="margin-top:12px" onclick="save('${c.id}')">Save review</button>`;
+  d.scrollIntoView({behavior: 'smooth'});
+}
+
+async function save(id) {
+  await api(`/api/calls/${id}/review`, {json: {reviewed_outcome: $('ro').value || null, reviewed_persona: $('rp').value || null,
+    corrected_user_text: $('ct').value, reviewer_notes: $('rn').value}});
+  toast('Review saved');
+  await load(); await openCall(id);
+}
+$('fversion').onchange = $('fchannel').onchange = load;
+api('/api/prompt').then(p => {
+  $('fversion').innerHTML += p.versions.map(v => `<option value="${v.id}">Prompt v${v.id}${v.id === p.active_version ? ' (active)' : ''}${v.note ? ': ' + esc(v.note.slice(0, 40)) : ''}</option>`).join('');
+  $('navinfo').textContent = `Active prompt: v${p.active_version}`;
+});
+load(); setInterval(load, 15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice agent: prompt studio</title>
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js"></script>
+<style>
+  .studio { display:grid; grid-template-columns:minmax(420px, 1fr) minmax(420px, 1fr); gap:14px; align-items:start; }
+  @media (max-width: 1000px) { .studio { grid-template-columns:1fr; } }
+  .pane { position:sticky; top:62px; max-height:calc(100vh - 76px); overflow:auto; }
+  .sec { background:var(--card); border:1px solid var(--line); border-radius:12px; margin:8px 0; }
+  .sec.off { opacity:.55; }
+  .sec > header { display:flex; gap:8px; align-items:center; padding:9px 12px; cursor:pointer; }
+  .sec > header .t1 { font-weight:600; flex:1; } .sec > .body { padding:0 12px 12px; display:none; }
+  .sec.open > .body { display:block; }
+  .sub { border:1px solid var(--line); border-radius:10px; padding:10px; margin:8px 0; background:var(--bg); }
+  .sub .toolbar { justify-content:space-between; }
+  .pair { display:grid; grid-template-columns:1fr 2fr auto; gap:6px; margin:4px 0; align-items:start; }
+  .tabs { display:flex; gap:4px; margin-bottom:8px; flex-wrap:wrap; }
+  .tabs button { background:transparent; color:var(--ink); border:1px solid var(--line); }
+  .tabs button.on { background:var(--ink); color:var(--bg); }
+  .errors { background:color-mix(in srgb, var(--bad) 12%, transparent); border:1px solid var(--bad); color:var(--bad); border-radius:10px; padding:8px 12px; margin:8px 0; }
+  .vars code { cursor:pointer; padding:1px 5px; background:var(--code); border-radius:5px; }
+  .chat { display:flex; flex-direction:column; gap:6px; }
+  .msg { padding:8px 11px; border-radius:12px; max-width:85%; white-space:pre-wrap; }
+  .msg.agent { background:var(--code); align-self:flex-start; } .msg.caller { background:var(--bar); color:#fff; align-self:flex-end; }
+  .msg.tool { font-family:ui-monospace,Menlo,monospace; font-size:12px; background:transparent; border:1px dashed var(--line); align-self:stretch; max-width:100%; }
+  .msg.end { border:1px solid var(--good); align-self:stretch; max-width:100%; }
+  .partitle { font-weight:600; margin:12px 0 4px; display:flex; gap:6px; align-items:center; }
+  .iconbtn { background:transparent; color:var(--muted); border:0; padding:2px 6px; cursor:pointer; font-size:14px; }
+  .iconbtn:hover { color:var(--ink); }
+</style>
+</head>
+<body>
+<main class="wide">
+  <div class="toolbar" style="justify-content:space-between">
+    <div>
+      <h1>Prompt studio</h1>
+      <div class="muted">Edit what the agent says and how it behaves. The right side shows exactly what is sent to the model. Saving creates a new version; calls record which version they ran on.</div>
+    </div>
+    <div class="toolbar">
+      <span id="dirty" class="pill warn" style="display:none">unsaved changes</span>
+      <select id="versions" style="width:auto"></select>
+      <button class="ghost" onclick="activateLoaded()" id="activateBtn">Make this version active</button>
+      <button class="ghost" onclick="resetDefault()">Reset to default</button>
+      <button onclick="saveDoc()">Save new version</button>
+    </div>
+  </div>
+  <div id="errors"></div>
+
+  <div class="studio" style="margin-top:10px">
+    <div>
+      <div class="card">
+        <label style="margin-top:0">Opening line <span class="muted">(spoken word for word at the start of every call; must disclose AI and recording)</span></label>
+        <textarea id="opening" rows="3"></textarea>
+        <div class="vars small muted" style="margin-top:8px" id="vars"></div>
+      </div>
+      <div id="sections"></div>
+      <div class="toolbar" style="margin-top:8px">
+        <span class="muted">Add a section:</span>
+        <button class="ghost small" onclick="addSection('text')">Text</button>
+        <button class="ghost small" onclick="addSection('list')">List</button>
+        <button class="ghost small" onclick="addSection('objections')">Objections</button>
+        <button class="ghost small" onclick="addSection('personas')">Personas</button>
+        <span style="flex:1"></span>
+        <button class="ghost small" onclick="toggleAll(true)">Expand all</button>
+        <button class="ghost small" onclick="toggleAll(false)">Collapse all</button>
+      </div>
+    </div>
+
+    <div class="pane card">
+      <div class="tabs">
+        <button data-tab="full" class="on">Full prompt</button>
+        <button data-tab="parts">By section</button>
+        <button data-tab="request">API request</button>
+        <button data-tab="play">Test chat</button>
+      </div>
+      <div id="stats" class="small muted" style="margin-bottom:8px"></div>
+      <div data-pane="full"><pre id="full"></pre></div>
+      <div data-pane="parts" style="display:none" id="parts"></div>
+      <div data-pane="request" style="display:none">
+        <div class="small muted" style="margin-bottom:6px">The chat-completions request a call starts with, as sent to <code id="endpoint"></code> (streaming). Each caller turn appends to <code>messages</code>.</div>
+        <pre id="request"></pre>
+      </div>
+      <div data-pane="play" style="display:none">
+        <div class="small muted" style="margin-bottom:8px">Type as the person who picked up. Uses the prompt <b>as currently edited</b> (even unsaved), the model and settings from the Settings page. Calendar lookups are real; bookings are dry runs. Costs a few paise per message.</div>
+        <div class="chat" id="chat"></div>
+        <div class="toolbar" style="margin-top:10px">
+          <input id="say" placeholder="Hello, who is this?" style="flex:1" onkeydown="if(event.key==='Enter')send()">
+          <button onclick="send()" id="sendBtn">Send</button>
+          <button class="ghost" onclick="resetChat()">Restart</button>
+        </div>
+        <div class="small muted" id="chatinfo" style="margin-top:6px"></div>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+nav('/studio');
+let doc = null, saved = '', activeVersion = null, loadedVersion = null, variables = [];
+const open = new Set();
+const KIND_HELP = {
+  text: 'Free text.',
+  list: 'One bullet per item.',
+  objections: 'When the person says something like the trigger, the agent responds along these lines.',
+  personas: 'Who the agent may reach. Each persona key becomes an allowed tag in end_call, so add one here and the agent can classify it.',
+};
+
+// --- load / save -------------------------------------------------------------
+async function init() {
+  const p = await api('/api/prompt');
+  activeVersion = p.active_version; variables = p.variables;
+  setDoc(p.doc, p.active_version);
+  renderVersions(p.versions);
+  $('vars').innerHTML = 'Variables (click to copy): ' + variables.map(v => `<code title="${esc(v.help)}: ${esc(String(v.value).slice(0, 200))}" onclick="copyVar('${v.name}')">{${v.name}}</code>`).join(' ');
+}
+function setDoc(d, version) {
+  doc = structuredClone(d); loadedVersion = version; saved = JSON.stringify(doc);
+  render(); preview();
+}
+function renderVersions(versions) {
+  $('versions').innerHTML = versions.map(v => `<option value="${v.id}" ${v.id === loadedVersion ? 'selected' : ''}>v${v.id}${v.id === activeVersion ? ' (active)' : ''} · ${new Date(v.created_at).toLocaleString()}${v.note ? ' · ' + esc(v.note.slice(0, 50)) : ''}</option>`).join('');
+  $('activateBtn').disabled = loadedVersion === activeVersion;
+  $('navinfo').textContent = `Active prompt: v${activeVersion}`;
+}
+$('versions').onchange = async () => {
+  if (isDirty() && !confirm('Discard unsaved changes?')) { $('versions').value = loadedVersion; return; }
+  const v = await api('/api/prompt/versions/' + $('versions').value);
+  setDoc(v.doc, v.id); renderVersions((await api('/api/prompt')).versions);
+};
+async function saveDoc() {
+  const note = prompt('What changed? (shown in the version list)', '');
+  if (note === null) return;
+  try {
+    const r = await api('/api/prompt', {json: {doc, note, activate: true}});
+    activeVersion = r.active_version; loadedVersion = r.version; saved = JSON.stringify(doc);
+    renderVersions((await api('/api/prompt')).versions); markDirty();
+    toast(`Saved as v${r.version}. New calls use it.`);
+  } catch (e) { showErrors([e.message]); }
+}
+async function activateLoaded() {
+  await api('/api/prompt/activate/' + loadedVersion, {method: 'POST'});
+  activeVersion = loadedVersion; renderVersions((await api('/api/prompt')).versions);
+  toast(`v${loadedVersion} is now active.`);
+}
+async function resetDefault() {
+  if (!confirm('Save the factory default prompt (script.yaml) as a new active version?')) return;
+  await api('/api/prompt/reset', {method: 'POST'});
+  await init(); toast('Reset to default.');
+}
+function isDirty() { return JSON.stringify(doc) !== saved; }
+function markDirty() { $('dirty').style.display = isDirty() ? '' : 'none'; }
+window.onbeforeunload = e => { if (isDirty()) { e.preventDefault(); return ''; } };
+function copyVar(name) { navigator.clipboard?.writeText('{' + name + '}'); toast(`Copied {${name}}`, 1500); }
+
+// --- editor ------------------------------------------------------------------
+function field(path, label, value, rows = 0, ph = '') {
+  const tag = rows ? `<textarea rows="${rows}" data-path="${path}" placeholder="${esc(ph)}">${esc(value)}</textarea>` : `<input data-path="${path}" value="${esc(value)}" placeholder="${esc(ph)}">`;
+  return `${label ? `<label>${label}</label>` : ''}${tag}`;
+}
+function render() {
+  $('opening').value = doc.opening_line;
+  $('sections').innerHTML = doc.sections.map((s, i) => {
+    let inner = `<div class="cols" style="grid-template-columns:2fr 1fr">
+        <div>${field(`sections.${i}.title`, 'Title', s.title)}</div>
+        <div>${field(`sections.${i}.id`, 'Id', s.id)}</div></div>
+      <div class="small muted">${KIND_HELP[s.kind] || ''}</div>
+      ${field(`sections.${i}.body`, 'Text', s.body, Math.min(14, Math.max(3, Math.ceil(s.body.length / 70))))}`;
+    if (s.kind === 'list') {
+      inner += `<label>Items <span class="muted">(one per line)</span></label><textarea rows="${Math.max(3, s.items.length + 1)}" data-list="${i}">${esc(s.items.join('\n'))}</textarea>`;
+    } else if (s.kind === 'objections') {
+      inner += `<label>Objections</label>` + s.items.map((o, j) => `<div class="pair">
+          <textarea rows="2" data-path="sections.${i}.items.${j}.trigger" placeholder="When they say…">${esc(o.trigger)}</textarea>
+          <textarea rows="2" data-path="sections.${i}.items.${j}.response" placeholder="Respond with…">${esc(o.response)}</textarea>
+          <button class="iconbtn" title="Remove" onclick="removeItem(${i},${j})">✕</button></div>`).join('') +
+        `<button class="ghost small" onclick="addObjection(${i})">+ Objection</button>`;
+    } else if (s.kind === 'personas') {
+      inner += s.personas.map((p, j) => `<div class="sub">
+          <div class="toolbar"><b>${esc(p.name || p.key || 'New persona')}</b><span class="pill">tag: ${esc(p.key)}</span>
+            <span><button class="iconbtn" title="Move up" onclick="movePersona(${i},${j},-1)">↑</button><button class="iconbtn" title="Move down" onclick="movePersona(${i},${j},1)">↓</button><button class="iconbtn" title="Remove" onclick="removePersona(${i},${j})">✕</button></span></div>
+          <div class="cols" style="grid-template-columns:1fr 1fr">
+            <div>${field(`sections.${i}.personas.${j}.name`, 'Name', p.name)}</div>
+            <div>${field(`sections.${i}.personas.${j}.key`, 'Tag (used in end_call)', p.key)}</div></div>
+          ${field(`sections.${i}.personas.${j}.roles`, 'Typical roles', p.roles || '')}
+          ${field(`sections.${i}.personas.${j}.pain`, 'Pain point', p.pain || '', 2)}
+          ${field(`sections.${i}.personas.${j}.pitch`, 'Pitch', p.pitch || '', 3)}
+          <label>Discovery questions <span class="muted">(one per line)</span></label>
+          <textarea rows="${Math.max(2, (p.questions || []).length + 1)}" data-questions="${i}.${j}">${esc((p.questions || []).join('\n'))}</textarea>
+        </div>`).join('') + `<button class="ghost small" onclick="addPersona(${i})">+ Persona</button>`;
+    }
+    inner += field(`sections.${i}.footer`, 'Footer <span class="muted">(after the items)</span>', s.footer, s.footer ? 2 : 1);
+    return `<div class="sec ${open.has(i) ? 'open' : ''} ${s.enabled ? '' : 'off'}" data-i="${i}">
+      <header onclick="toggle(${i}, event)">
+        <input type="checkbox" title="Include in the prompt" ${s.enabled ? 'checked' : ''} onclick="event.stopPropagation()" onchange="setEnabled(${i}, this.checked)">
+        <span class="t1">${esc(s.title || s.id)}</span><span class="pill">${s.kind}</span>
+        <button class="iconbtn" title="Move up" onclick="move(${i},-1,event)">↑</button>
+        <button class="iconbtn" title="Move down" onclick="move(${i},1,event)">↓</button>
+        <button class="iconbtn" title="Delete section" onclick="removeSection(${i},event)">✕</button>
+      </header><div class="body">${inner}</div></div>`;
+  }).join('');
+  markDirty();
+}
+function setPath(path, value) {
+  const keys = path.split('.'); let o = doc;
+  for (const k of keys.slice(0, -1)) o = o[k];
+  o[keys.at(-1)] = value;
+}
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.id === 'opening') doc.opening_line = t.value;
+  else if (t.dataset.path) setPath(t.dataset.path, t.value);
+  else if (t.dataset.list) doc.sections[+t.dataset.list].items = t.value.split('\n').filter(x => x.trim());
+  else if (t.dataset.questions) { const [i, j] = t.dataset.questions.split('.').map(Number); doc.sections[i].personas[j].questions = t.value.split('\n').filter(x => x.trim()); }
+  else return;
+  markDirty(); preview();
+});
+function toggle(i, e) { if (e.target.closest('button,input')) return; open.has(i) ? open.delete(i) : open.add(i); render(); }
+function toggleAll(on) { open.clear(); if (on) doc.sections.forEach((_, i) => open.add(i)); render(); }
+function setEnabled(i, on) { doc.sections[i].enabled = on; render(); preview(); }
+function move(i, d, e) {
+  e.stopPropagation(); const j = i + d; if (j < 0 || j >= doc.sections.length) return;
+  [doc.sections[i], doc.sections[j]] = [doc.sections[j], doc.sections[i]];
+  const oi = open.has(i), oj = open.has(j); open.delete(i); open.delete(j); if (oi) open.add(j); if (oj) open.add(i);
+  render(); preview();
+}
+function removeSection(i, e) {
+  e.stopPropagation();
+  if (!confirm(`Delete the section "${doc.sections[i].title || doc.sections[i].id}"? (You can untick it instead to switch it off.)`)) return;
+  doc.sections.splice(i, 1); open.clear(); render(); preview();
+}
+function addSection(kind) {
+  let n = 1; while (doc.sections.some(s => s.id === `custom_${n}`)) n++;
+  doc.sections.splice(doc.sections.length - 1, 0, {id: `custom_${n}`, title: 'New section', kind, enabled: true, body: '', footer: '', items: [], personas: []});
+  open.clear(); open.add(doc.sections.length - 2); render(); preview();
+}
+function addObjection(i) { doc.sections[i].items.push({trigger: '', response: ''}); render(); }
+function removeItem(i, j) { doc.sections[i].items.splice(j, 1); render(); preview(); }
+function addPersona(i) {
+  let n = 1; while (doc.sections[i].personas.some(p => p.key === `persona_${n}`)) n++;
+  doc.sections[i].personas.push({key: `persona_${n}`, name: '', roles: '', pain: '', pitch: '', questions: []}); render(); preview();
+}
+function removePersona(i, j) { if (confirm('Remove this persona?')) { doc.sections[i].personas.splice(j, 1); render(); preview(); } }
+function movePersona(i, j, d) {
+  const ps = doc.sections[i].personas, k = j + d; if (k < 0 || k >= ps.length) return;
+  [ps[j], ps[k]] = [ps[k], ps[j]]; render(); preview();
+}
+
+// --- preview -----------------------------------------------------------------
+let previewTimer;
+function preview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    const p = await api('/api/prompt/preview', {json: {doc}});
+    showErrors(p.errors);
+    $('full').textContent = p.system_prompt;
+    $('parts').innerHTML = p.sections.map(s => `<div class="partitle">${esc(s.title || s.id)} <span class="pill">${s.enabled ? 'on' : 'off'}</span></div><pre style="${s.enabled ? '' : 'opacity:.5'}">${esc(s.text)}</pre>`).join('');
+    $('request').textContent = JSON.stringify(p.request, null, 2);
+    $('endpoint').textContent = p.endpoint;
+    $('stats').textContent = `${p.stats.words} words · ${p.stats.chars} characters · ≈${p.stats.approx_tokens} tokens (sent on every reply, so longer prompts add latency and cost) · persona tags: ${p.persona_tags.join(', ')}`;
+  }, 300);
+}
+function showErrors(errors) {
+  $('errors').innerHTML = errors.length ? `<div class="errors"><b>Can't save yet:</b><br>${errors.map(esc).join('<br>')}</div>` : '';
+}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('[data-pane]').forEach(p => p.style.display = p.dataset.pane === b.dataset.tab ? '' : 'none');
+  if (b.dataset.tab === 'play' && !chat.shown) resetChat();
+});
+
+// --- test chat ---------------------------------------------------------------
+const chat = {messages: [], state: {}, shown: false, cost: 0};
+function bubble(cls, html) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.innerHTML = html; $('chat').appendChild(d); d.scrollIntoView({block: 'nearest'}); }
+function resetChat() {
+  chat.messages = [{role: 'assistant', content: doc.opening_line.replaceAll('{org}', (variables.find(v => v.name === 'org') || {}).value || '{org}')}];
+  chat.state = {}; chat.shown = true; chat.cost = 0;
+  $('chat').innerHTML = ''; $('chatinfo').textContent = '';
+  bubble('agent', esc(chat.messages[0].content));
+  $('say').disabled = $('sendBtn').disabled = false;
+}
+async function send() {
+  const text = $('say').value.trim(); if (!text) return;
+  $('say').value = ''; bubble('caller', esc(text));
+  chat.messages.push({role: 'user', content: text});
+  $('sendBtn').disabled = true;
+  try {
+    const r = await api('/api/playground', {json: {doc, messages: chat.messages, state: chat.state}});
+    chat.messages.push(...r.messages); chat.state = r.state; chat.cost += r.cost_inr;
+    for (const ev of r.events) {
+      if (ev.type === 'tool') bubble('tool', `⚙ ${esc(ev.name)}(${esc(JSON.stringify(ev.args))})\n→ ${esc(JSON.stringify(ev.result))}`);
+      else if (ev.text) bubble('agent', esc(ev.text) + `<div class="small muted">${ev.ms} ms</div>`);
+    }
+    if (r.state.ended) {
+      const e = r.state.ended;
+      bubble('agent', esc(e.closing_line));
+      bubble('end', `<b>Call ended.</b> Recorded:<pre>${esc(JSON.stringify(e.record, null, 2))}</pre>`);
+      $('say').disabled = true;
+    }
+    $('chatinfo').textContent = `This chat so far: ${chat.messages.filter(m => m.role === 'user').length} turns · ≈₹${chat.cost.toFixed(3)} · last turn ${r.usage.prompt_tokens}+${r.usage.completion_tokens} tokens`;
+  } catch (e) {
+    chat.messages.pop(); bubble('tool', '<span class="bad">' + esc(e.message) + '</span>');
+  } finally { $('sendBtn').disabled = $('say').disabled; $('say').focus(); }
+}
+init();
+</script>
+</body>
+</html>

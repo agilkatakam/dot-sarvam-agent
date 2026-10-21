@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice agent: settings and meetings</title>
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/app.js"></script>
+<style>
+  .settings { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:10px; }
+  .setting { margin-bottom:10px; } .setting label { margin:0 0 3px; } .setting .small { margin-top:2px; }
+  .changed input, .changed select { border-color:var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Settings and meetings</h1>
+  <div class="muted">Settings apply from the next call; no restart needed. Each call stores the settings it ran with.</div>
+
+  <h2>Agent settings</h2>
+  <div class="settings" id="settings"></div>
+  <div class="toolbar">
+    <button onclick="saveSettings()">Save settings</button>
+    <button class="ghost" onclick="resetSettings()">Back to defaults</button>
+    <button class="ghost" onclick="previewVoice()" id="voiceBtn">▶ Preview voice</button>
+    <span class="small muted">Preview speaks the opening line with the voice, pace and language selected above (about ₹0.3).</span>
+  </div>
+
+  <h2>Calendar</h2>
+  <div class="card">
+    <div id="calendar">Loading…</div>
+    <div class="toolbar" style="margin-top:10px">
+      <input type="date" id="day" style="width:auto">
+      <select id="part" style="width:auto"><option value="any">Any time</option><option value="morning">Morning</option><option value="afternoon">Afternoon</option></select>
+      <button class="ghost" onclick="checkDay()">Show what the agent would offer</button>
+      <span id="slots" class="small"></span>
+    </div>
+  </div>
+
+  <h2>Booked meetings</h2>
+  <div class="table-wrap"><table><thead><tr><th>When</th><th>Contact</th><th>Institution</th><th>Email</th><th>Persona</th><th>Calendar</th><th>Status</th><th></th></tr></thead><tbody id="bookings"></tbody></table></div>
+
+  <h2>Do-not-call list <span class="muted">(people who opted out are added automatically)</span></h2>
+  <div class="card">
+    <div class="toolbar">
+      <select id="dkind" style="width:auto"><option value="phone">Phone</option><option value="email">Email</option><option value="institution">Institution</option></select>
+      <input id="dvalue" placeholder="+91 98xxxxxxxx / name@college.edu / Institution name" style="flex:1;min-width:220px">
+      <input id="dreason" placeholder="Reason (optional)" style="flex:1;min-width:160px">
+      <button onclick="addDnc()">Add</button>
+    </div>
+  </div>
+  <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Added</th><th>Type</th><th>Value</th><th>Reason</th><th>Call</th><th></th></tr></thead><tbody id="dnc"></tbody></table></div>
+</main>
+<script>
+nav('/admin');
+let current = {}, schema = [];
+
+async function loadSettings() {
+  const r = await api('/api/settings'); current = r.values; schema = r.schema;
+  const groups = [...new Set(schema.map(f => f.group))];
+  $('settings').innerHTML = groups.map(g => `<div class="card"><h3 style="margin-top:0">${esc(g)}</h3>` + schema.filter(f => f.group === g).map(f => {
+    const v = current[f.key];
+    let input;
+    if (f.kind === 'choice') input = `<select id="s_${f.key}">${f.choices.map(c => `<option ${c === v ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`;
+    else if (f.kind === 'bool') input = `<input type="checkbox" id="s_${f.key}" ${v ? 'checked' : ''}>`;
+    else input = `<input id="s_${f.key}" type="${f.kind === 'text' ? 'text' : 'number'}" ${f.kind === 'float' ? 'step="0.05"' : ''} ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} value="${esc(v)}">`;
+    return `<div class="setting" id="w_${f.key}"><label for="s_${f.key}">${esc(f.label)}</label>${input}
+      <div class="small muted">${esc(f.help)}${String(v) !== String(f.default) ? ` (default ${esc(f.default)})` : ''}</div></div>`;
+  }).join('') + '</div>').join('');
+  schema.forEach(f => $('s_' + f.key).addEventListener('input', () => $('w_' + f.key).classList.add('changed')));
+}
+function readSettings() {
+  const out = {};
+  for (const f of schema) {
+    const el = $('s_' + f.key);
+    out[f.key] = f.kind === 'bool' ? el.checked : f.kind === 'int' || f.kind === 'float' ? Number(el.value) : el.value;
+  }
+  return out;
+}
+async function saveSettings() {
+  try { await api('/api/settings', {json: readSettings()}); toast('Saved. The next call uses these settings.'); loadSettings(); }
+  catch (e) { toast(e.message, 6000); }
+}
+async function resetSettings() {
+  if (!confirm('Reset all settings to the defaults from .env?')) return;
+  await api('/api/settings/reset', {method: 'POST'}); loadSettings(); toast('Settings reset.');
+}
+async function previewVoice() {
+  const s = readSettings(); $('voiceBtn').disabled = true;
+  try {
+    const r = await api('/api/voice-preview', {json: {voice: s.tts_voice, pace: s.tts_pace, language: s.tts_language, model: s.tts_model}});
+    const url = URL.createObjectURL(await r.blob()); new Audio(url).play();
+  } catch (e) { toast(e.message, 6000); }
+  finally { $('voiceBtn').disabled = false; }
+}
+
+async function loadCalendar() {
+  const c = await api('/api/calendar');
+  $('calendar').innerHTML = `<b class="${c.ok ? 'good' : 'bad'}">${c.backend === 'google' ? 'Google Calendar' : 'Built-in calendar'}</b> · ${esc(c.detail)}
+    <div class="small muted" style="margin-top:4px">${c.meeting_minutes} minute meetings · ${esc(c.hours)} · ${esc(c.days)} · ${esc(c.timezone)}${c.team_emails ? ' · invites also go to ' + esc(c.team_emails) : ''}. Change these in .env.</div>`;
+  const d = new Date(); d.setDate(d.getDate() + 1); $('day').value = d.toISOString().slice(0, 10);
+}
+async function checkDay() {
+  const r = await api(`/api/availability?date=${$('day').value}&part_of_day=${$('part').value}`);
+  $('slots').innerHTML = !r.ok ? `<span class="bad">${esc(r.error)}</span>` : r.slots.length ? r.slots.map(s => `<span class="pill">${esc(s.say)}</span>`).join(' ') : `<span class="muted">${esc(r.note)}</span>`;
+}
+async function loadBookings() {
+  const rows = await api('/api/bookings');
+  $('bookings').innerHTML = rows.length ? rows.map(b => `<tr style="${b.status === 'cancelled' ? 'opacity:.5' : ''}">
+    <td>${esc(b.say)}</td><td>${esc(b.contact_name ?? '—')}${b.contact_title ? ` <span class="muted">(${esc(b.contact_title)})</span>` : ''}</td><td>${esc(b.institution ?? '—')}</td>
+    <td>${esc(b.contact_email ?? '—')}</td><td>${esc(b.persona ?? '—')}</td>
+    <td>${esc(b.backend)}${b.html_link ? ` <a href="${esc(b.html_link)}" target="_blank">open</a>` : ''}${b.meet_link ? ` · <a href="${esc(b.meet_link)}" target="_blank">Meet</a>` : ''}</td>
+    <td>${esc(b.status)}</td>
+    <td><a class="btn ghost small" href="/api/bookings/${b.id}.ics">.ics</a> ${b.status !== 'cancelled' ? `<button class="danger small" onclick="cancelBooking('${b.id}')">Cancel</button>` : ''}</td></tr>`).join('')
+    : '<tr><td colspan="8" class="muted">No meetings booked yet.</td></tr>';
+}
+async function cancelBooking(id) {
+  if (!confirm('Cancel this meeting? On Google Calendar, attendees are notified.')) return;
+  try { await api(`/api/bookings/${id}/cancel`, {method: 'POST'}); toast('Meeting cancelled.'); loadBookings(); }
+  catch (e) { toast(e.message, 6000); }
+}
+
+async function loadDnc() {
+  const rows = await api('/api/dnc');
+  $('dnc').innerHTML = rows.length ? rows.map(r => `<tr><td>${new Date(r.created_at).toLocaleString()}</td><td>${esc(r.kind)}</td><td>${esc(r.value)}</td><td>${esc(r.reason ?? '')}</td>
+    <td>${r.call_id ? `<a href="/dashboard">${esc(r.call_id.slice(0, 8))}</a>` : ''}</td><td><button class="ghost small" onclick="removeDnc(${r.id})">Remove</button></td></tr>`).join('')
+    : '<tr><td colspan="6" class="muted">Nobody on the list yet.</td></tr>';
+}
+async function addDnc() {
+  try {
+    const r = await api('/api/dnc', {json: {kind: $('dkind').value, value: $('dvalue').value, reason: $('dreason').value}});
+    toast(r.added ? 'Added.' : 'Already on the list.'); $('dvalue').value = $('dreason').value = ''; loadDnc();
+  } catch (e) { toast(e.message, 6000); }
+}
+async function removeDnc(id) { if (confirm('Remove from the do-not-call list?')) { await api('/api/dnc/' + id, {method: 'DELETE'}); loadDnc(); } }
+
+loadSettings(); loadCalendar(); loadBookings(); loadDnc();
+api('/api/prompt').then(p => $('navinfo').textContent = `Active prompt: v${p.active_version}`);
+</script>
+</body>
+</html>

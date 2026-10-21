@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dot-sarvam-agent"
+version = "0.1.0"
+description = "DOTxBGCC test voice agent - Sarvam AI only (STT + LLM + TTS), with KPI tracking"
+requires-python = ">=3.11"
+dependencies = [
+    # Pinned: Pipecat's Sarvam service classes and settings API change between releases.
+    "pipecat-ai[sarvam,silero,websocket]==1.8.1",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    "openai>=1.50",                      # text playground (Sarvam's OpenAI-compatible API)
+    "google-api-python-client>=2.100",   # Google Calendar booking (optional at runtime)
+    "google-auth-oauthlib>=1.2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[tool.setuptools.packages.find]
+include = ["agent*", "scripts*"]
+
+[tool.setuptools.package-data]
+agent = ["static/*", "script.yaml"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
