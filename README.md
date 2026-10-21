@@ -32,6 +32,17 @@ caller (browser or phone) ⇄ this server ⇄ Sarvam STT (saaras:v3-realtime)
 | `/studio` | **Prompt studio**: edit the prompt and see exactly what is sent to the model; try it in a text chat. |
 | `/admin` | Runtime settings (model, voice, turn-taking, limits), voice preview, calendar, booked meetings, do-not-call list. |
 
+### Friends testing on their own computers
+
+Send them the repo and [TESTING.md](TESTING.md). `start.bat` (Windows) or `start.command`
+(Mac/Linux) installs everything through uv, asks once for the Sarvam key, and opens the call
+page. Testers type their name before each call. Pressing Ctrl+C saves
+`dot-test-results-<name>-<date>.zip`, or they can run `export-results` at any time. The zip holds
+`calls.csv`, readable `transcripts/`, `calls.db`, `recordings/` and `logs/`, with the key removed.
+
+To browse a tester's results in your own dashboard, unzip it and run
+`DATA_DIR=/path/to/unzipped .venv/bin/python -m agent.server`.
+
 ### Let anyone call it (free public link)
 
 ```bash

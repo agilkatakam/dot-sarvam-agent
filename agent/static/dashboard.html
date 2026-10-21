@@ -17,6 +17,7 @@
         <option value="">All channels</option><option value="browser">Browser</option><option value="phone">Phone</option><option value="simulated">Simulated</option>
       </select>
       <a class="btn ghost" id="csv" href="/api/calls.csv">Export CSV</a>
+      <a class="btn ghost" href="/api/export.zip">Download test results (zip)</a>
     </div>
   </div>
 
@@ -39,7 +40,7 @@
   <div class="table-wrap"><table><thead><tr><th>Version</th><th>Attempts</th><th>Completion</th><th>Meetings</th><th>Reached decision-maker</th><th>Intent accuracy</th><th>Reply p50</th><th>Cost / call</th></tr></thead><tbody id="versions"></tbody></table></div>
 
   <h2>Calls <span class="muted">(click one to review it)</span></h2>
-  <div class="table-wrap"><table><thead><tr><th>Started</th><th>Channel</th><th>v</th><th>Connected</th><th>Ended by</th><th>Persona</th><th>Seriousness</th><th>Agent outcome</th><th>Final outcome</th><th>Cost</th><th>Reviewed</th></tr></thead><tbody id="calls"></tbody></table></div>
+  <div class="table-wrap"><table><thead><tr><th>Started</th><th>Tester</th><th>Channel</th><th>v</th><th>Connected</th><th>Ended by</th><th>Persona</th><th>Seriousness</th><th>Agent outcome</th><th>Final outcome</th><th>Cost</th><th>Reviewed</th></tr></thead><tbody id="calls"></tbody></table></div>
   <div id="detail" class="card" style="display:none;margin-top:12px"></div>
 </main>
 <script>
@@ -101,7 +102,7 @@ async function load() {
 
   const calls = await api('/api/calls' + q);
   $('calls').innerHTML = calls.map(c => `<tr class="click" onclick="openCall('${c.id}')">
-    <td>${new Date(c.started_at).toLocaleString()}</td><td>${c.channel}</td><td>${c.prompt_version ?? ''}</td><td>${c.connected_at ? 'yes' : '<span class="bad">no</span>'}</td>
+    <td>${new Date(c.started_at).toLocaleString()}</td><td>${esc(c.tester ?? '—')}</td><td>${c.channel}</td><td>${c.prompt_version ?? ''}</td><td>${c.connected_at ? 'yes' : '<span class="bad">no</span>'}</td>
     <td>${esc(c.end_reason ?? 'live')}</td><td>${esc(c.reviewed_persona || c.persona || '—')}</td><td>${esc(c.seriousness ?? '—')}</td><td>${esc(c.agent_outcome ?? '—')}</td><td>${esc(c.final_outcome ?? '—')}</td><td>${inr(c.cost_inr)}</td><td>${c.reviewed_at ? '✓' : ''}</td></tr>`).join('');
 }
 
@@ -113,7 +114,7 @@ async function openCall(id) {
   const rt = c.runtime_settings ? `${esc(c.runtime_settings.llm_model)} · voice ${esc(c.runtime_settings.tts_voice)} · turn ${esc(c.runtime_settings.turn_mode)}` : esc(c.llm_model ?? '');
   const b = c.booking;
   d.style.display = 'block';
-  d.innerHTML = `<h2 style="margin-top:0">Call ${esc(c.id.slice(0, 8))} <span class="muted">${esc(c.channel)} ${esc(c.caller ?? '')} · prompt v${c.prompt_version ?? '?'} · ${rt}</span></h2>
+  d.innerHTML = `<h2 style="margin-top:0">Call ${esc(c.id.slice(0, 8))} <span class="muted">${esc(c.tester ?? '')} · ${esc(c.channel)} ${esc(c.caller ?? '')} · prompt v${c.prompt_version ?? '?'} · ${rt}</span></h2>
     <div class="muted">Contact: ${esc(c.contact_name ?? '—')} (${esc(c.contact_title ?? '—')}) · ${esc(c.institution ?? '')} ${esc(c.contact_email ?? '')}</div>
     <div class="muted">Persona ${esc(c.persona ?? '—')} · seriousness ${esc(c.seriousness ?? '—')} · interest ${esc(c.interest_level ?? '—')} · next step ${esc(c.next_step ?? '—')}${c.opted_out ? ' · <b class="bad">opted out</b>' : ''} · callback ${esc(c.callback_time ?? '—')}</div>
     <div class="muted">Meeting: ${b ? `<b>${esc(c.meeting_time)}</b> (${esc(b.backend)}, ${esc(b.status)}) <a href="/api/bookings/${b.id}.ics">.ics</a>${b.meet_link ? ` · <a href="${esc(b.meet_link)}" target="_blank">Meet</a>` : ''}` : '—'}</div>

@@ -79,7 +79,7 @@ ADDED_COLUMNS = (
     "institution", "contact_email", "interest_level", "next_step", "opted_out",
     "prompt_version INTEGER", "seriousness", "reviewed_persona", "booking_id",
     "duration_secs REAL", "llm_in_tokens INTEGER", "llm_out_tokens INTEGER", "tts_chars INTEGER",
-    "cost_inr REAL", "filler_count INTEGER", "runtime_settings",
+    "cost_inr REAL", "filler_count INTEGER", "runtime_settings", "tester",
 )
 
 
@@ -115,11 +115,11 @@ def init() -> None:
 
 # --- calls ------------------------------------------------------------------
 
-def insert_call(call_id: str, channel: str, caller: str | None) -> None:
+def insert_call(call_id: str, channel: str, caller: str | None, tester: str | None = None) -> None:
     with db() as c:
         c.execute(
-            "INSERT INTO calls (id, channel, caller, started_at) VALUES (?, ?, ?, ?)",
-            (call_id, channel, caller, now()),
+            "INSERT INTO calls (id, channel, caller, tester, started_at) VALUES (?, ?, ?, ?, ?)",
+            (call_id, channel, caller, tester, now()),
         )
 
 

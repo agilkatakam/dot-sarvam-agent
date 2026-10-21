@@ -58,6 +58,7 @@ class Call:
     id: str
     channel: str  # browser | phone | simulated
     caller: str | None = None
+    tester: str | None = None  # name typed on the call page by whoever is testing
     record: dict = field(default_factory=dict)  # columns written to the calls row at the end
     transcript: list[dict] = field(default_factory=list)
     send_captions: bool = False
@@ -185,7 +186,7 @@ def call_prompt() -> tuple[int, dict, str]:
 
 
 async def run_call(transport: BaseTransport, call: Call) -> None:
-    db.insert_call(call.id, call.channel, call.caller)
+    db.insert_call(call.id, call.channel, call.caller, call.tester)
     rt = runtime.load()
     worker: PipelineWorker | None = None
     timers: dict[str, asyncio.Task] = {}

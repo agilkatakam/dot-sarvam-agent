@@ -25,6 +25,8 @@
   .user { background:var(--accent); color:#fff; align-self:flex-end; }
   .filler { opacity:.6; font-style:italic; }
   .hint { color:var(--muted); font-size:13px; margin-top:18px; }
+  label { display:block; font-size:14px; color:var(--muted); margin-bottom:6px; }
+  #tester { width:100%; font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:14px; }
 </style>
 </head>
 <body>
@@ -32,6 +34,8 @@
   <h1>Talk to the DOT voice agent</h1>
   <p class="sub">A test call with an AI assistant. Pretend you're a college receptionist, placement head, dean or librarian.</p>
   <div class="card">
+    <label for="tester">Your name (so we know whose test call this was)</label>
+    <input id="tester" autocomplete="name" placeholder="e.g. Priya">
     <button id="btn">Start call</button>
     <div class="meter"><i id="lvl"></i></div>
     <div id="status">Ready</div>
@@ -43,7 +47,9 @@
 <script>
 const RATE = 16000;
 const btn = document.getElementById('btn'), statusEl = document.getElementById('status'),
-      logEl = document.getElementById('log'), lvl = document.getElementById('lvl');
+      logEl = document.getElementById('log'), lvl = document.getElementById('lvl'),
+      testerEl = document.getElementById('tester');
+testerEl.value = localStorage.getItem('tester') || '';
 let ws, ctx, stream, player, mic, ending = false;
 
 const WORKLETS = `
@@ -90,6 +96,9 @@ function say(role, text) {
 function setStatus(t) { statusEl.textContent = t; }
 
 async function start() {
+  const tester = testerEl.value.trim();
+  if (!tester) { setStatus('Type your name first.'); testerEl.focus(); return; }
+  localStorage.setItem('tester', tester);
   btn.disabled = true; logEl.innerHTML = ''; ending = false; setStatus('Connecting…');
   try {
     stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1}});
@@ -100,7 +109,7 @@ async function start() {
   let queued = 0; player.port.onmessage = e => { queued = e.data; if (ending && queued === 0) hangUp('Call ended by agent'); };
   mic = new AudioWorkletNode(ctx, 'mic'); ctx.createMediaStreamSource(stream).connect(mic);
 
-  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/browser');
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/browser?tester=' + encodeURIComponent(tester));
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => {
     setStatus('Connected — the agent will speak first');

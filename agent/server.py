@@ -7,16 +7,17 @@
   GET  /dashboard        KPI dashboard + call review          (password protected, as is
   GET  /studio           prompt studio: edit, preview, test    everything under /api)
   GET  /admin            settings, meetings, do-not-call list
+  GET  /api/export.zip   test results bundle (see agent/export.py)
 
 Run:  python -m agent.server
 """
 
 import asyncio
 import base64
-import csv
-import io
 import json
 import secrets
+import shutil
+import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -27,13 +28,14 @@ import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, Response
+from starlette.background import BackgroundTask
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from loguru import logger
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 from pydantic import BaseModel
 
-from agent import db, kpis, meetings, playground, prompt, runtime
+from agent import db, export, kpis, meetings, playground, prompt, runtime
 from agent.browser_serializer import BrowserPCMSerializer
 from agent.call import Call, run_call
 from agent.config import settings
@@ -119,8 +121,9 @@ async def browser_ws(ws: WebSocket):
         return
     # scripts/simulate_call.py connects with ?channel=simulated so its calls can be filtered out.
     channel = "simulated" if ws.query_params.get("channel") == "simulated" else "browser"
+    tester = (ws.query_params.get("tester") or "").strip()[:80] or None
     try:
-        call = Call(id=call_id, channel=channel, send_captions=True)
+        call = Call(id=call_id, channel=channel, tester=tester, send_captions=True)
         await run_call(_transport(ws, BrowserPCMSerializer()), call)
     finally:
         await _release()
@@ -226,26 +229,18 @@ async def api_calls(version: int | None = None, channel: str | None = None, _use
     return calls
 
 
-CSV_COLUMNS = (
-    "id", "channel", "caller", "started_at", "connected_at", "ended_at", "end_reason", "duration_secs",
-    "prompt_version", "llm_model", "agent_outcome", "final_outcome", "next_step", "persona", "reviewed_persona",
-    "seriousness", "interest_level", "contact_name", "contact_title", "institution", "contact_email",
-    "meeting_time", "callback_time", "opted_out", "summary", "cost_inr", "llm_in_tokens", "llm_out_tokens",
-    "tts_chars", "filler_count", "reviewed_outcome", "reviewer_notes", "error",
-)
-
-
 @app.get("/api/calls.csv")
 async def api_calls_csv(version: int | None = None, channel: str | None = None, _user: str = Depends(_auth)):
-    buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=(*CSV_COLUMNS, "transcript"), extrasaction="ignore")
-    w.writeheader()
-    for c in _calls_for(version, channel):
-        c["final_outcome"] = kpis.final_outcome(c)
-        c["transcript"] = "\n".join(f"{m['role']}: {m['text']}" for m in c["transcript"])
-        w.writerow(c)
-    return Response(buf.getvalue(), media_type="text/csv",
+    return Response(export.calls_csv(_calls_for(version, channel)), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="calls.csv"'})
+
+
+@app.get("/api/export.zip")
+async def api_export(_user: str = Depends(_auth)):
+    tmp = Path(tempfile.mkdtemp())
+    path = await asyncio.to_thread(export.write_bundle, tmp / export.bundle_name())
+    return FileResponse(path, media_type="application/zip", filename=path.name,
+                        background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True))
 
 
 @app.get("/api/calls/{call_id}")
@@ -536,7 +531,10 @@ async def api_dnc_check(phone: str | None = None, email: str | None = None, inst
 
 
 def main() -> None:
-    uvicorn.run(app, host="0.0.0.0", port=settings.port, proxy_headers=True, forwarded_allow_ips="*")
+    settings.logs_dir.mkdir(parents=True, exist_ok=True)
+    logger.add(settings.logs_dir / "server_{time:YYYY-MM-DD}.log", level="DEBUG", rotation="20 MB",
+               retention=20, encoding="utf-8", enqueue=True)
+    uvicorn.run(app, host=settings.host, port=settings.port, proxy_headers=True, forwarded_allow_ips="*")
 
 
 if __name__ == "__main__":

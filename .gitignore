@@ -6,3 +6,4 @@ data/
 .pytest_cache/
 secrets/
 *.egg-info/
+dot-test-results-*.zip

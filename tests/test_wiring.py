@@ -80,3 +80,26 @@ async def test_browser_serializer_roundtrip():
     assert await s.serialize(out) == b"\x00\x01"
     assert json.loads(await s.serialize(InterruptionFrame())) == {"type": "clear"}
     assert json.loads(await s.serialize(EndFrame())) == {"type": "end"}
+
+
+def test_export_bundle_has_tester_transcripts_and_csv(tmp_path):
+    import csv
+    import io
+    import zipfile
+
+    from agent import export
+    db.insert_call("call-1", "browser", None, "Priya")
+    db.update_call("call-1", connected_at=db.now(), ended_at=db.now(), end_reason="agent_hangup", agent_outcome="polite_decline",
+                   transcript=[{"role": "agent", "text": "Hello, this is an AI assistant"}, {"role": "user", "text": "Not interested"}])
+    db.insert_turn("call-1", "greeting", 480)
+    assert export.bundle_name().startswith("dot-test-results-Priya-")
+
+    path = export.write_bundle(tmp_path / "out.zip")
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        assert "calls.db" in names and "calls.csv" in names
+        [txt] = [n for n in names if n.startswith("transcripts/")]
+        body = z.read(txt).decode()
+        assert "Tester: Priya" in body and "USER: Not interested" in body and "480" in body
+        row = next(csv.DictReader(io.StringIO(z.read("calls.csv").decode())))
+        assert row["tester"] == "Priya" and row["final_outcome"] == "polite_decline"

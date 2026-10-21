@@ -72,6 +72,9 @@ class Settings:
     db_path: Path = _DATA / "calls.db"
     recordings_dir: Path = _DATA / "recordings"
     runtime_path: Path = _DATA / "runtime.json"
+    logs_dir: Path = _DATA / "logs"
+    # 0.0.0.0 so a tunnel or phone on the same network can reach it; the launcher uses 127.0.0.1.
+    host: str = os.getenv("HOST", "0.0.0.0").strip() or "0.0.0.0"
     port: int = _int("PORT", 7860) or 7860
 
     # The latency KPI threshold the client asked for, and the working target in the design doc.
