@@ -8,6 +8,7 @@
   GET  /studio           prompt studio: edit, preview, test    everything under /api)
   GET  /admin            settings, meetings, do-not-call list
   GET  /api/export.zip   test results bundle (see agent/export.py)
+  GET  /results.zip      the same, without a password, only when the tester launcher started us
 
 Run:  python -m agent.server
 """
@@ -17,6 +18,7 @@ import base64
 import json
 import secrets
 import shutil
+import sys
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
@@ -235,12 +237,35 @@ async def api_calls_csv(version: int | None = None, channel: str | None = None, 
                     headers={"Content-Disposition": 'attachment; filename="calls.csv"'})
 
 
-@app.get("/api/export.zip")
-async def api_export(_user: str = Depends(_auth)):
+async def _bundle_response() -> FileResponse:
     tmp = Path(tempfile.mkdtemp())
     path = await asyncio.to_thread(export.write_bundle, tmp / export.bundle_name())
     return FileResponse(path, media_type="application/zip", filename=path.name,
                         background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True))
+
+
+@app.get("/api/export.zip")
+async def api_export(_user: str = Depends(_auth)):
+    return await _bundle_response()
+
+
+# --- tester kit (scripts/launch.py runs the server on 127.0.0.1 with TESTER_MODE=1) ---
+
+@app.get("/api/tester")
+async def api_tester(name: str | None = None):
+    """Public: lets the call page show the tester's progress and detect the server going away."""
+    if not settings.tester_mode:
+        return {"tester_mode": False}
+    calls = [c for c in db.all_calls() if c["channel"] == "browser" and c.get("connected_at")]
+    mine = [c for c in calls if name and (c.get("tester") or "").lower() == name.strip().lower()]
+    return {"tester_mode": True, "calls": len(calls), "my_calls": len(mine), "has_key": bool(settings.sarvam_api_key)}
+
+
+@app.get("/results.zip")
+async def tester_results():
+    if not settings.tester_mode:
+        raise HTTPException(404)
+    return await _bundle_response()
 
 
 @app.get("/api/calls/{call_id}")
@@ -532,9 +557,14 @@ async def api_dnc_check(phone: str | None = None, email: str | None = None, inst
 
 def main() -> None:
     settings.logs_dir.mkdir(parents=True, exist_ok=True)
+    if settings.tester_mode:
+        # Testers aren't developers: keep their window calm. Everything still goes to the log file.
+        logger.remove()
+        logger.add(sys.stderr, level="ERROR", format="<red>{message}</red>")
     logger.add(settings.logs_dir / "server_{time:YYYY-MM-DD}.log", level="DEBUG", rotation="20 MB",
                retention=20, encoding="utf-8", enqueue=True)
-    uvicorn.run(app, host=settings.host, port=settings.port, proxy_headers=True, forwarded_allow_ips="*")
+    uvicorn.run(app, host=settings.host, port=settings.port, proxy_headers=True, forwarded_allow_ips="*",
+                log_level="error" if settings.tester_mode else "info")
 
 
 if __name__ == "__main__":

@@ -76,6 +76,8 @@ class Settings:
     # 0.0.0.0 so a tunnel or phone on the same network can reach it; the launcher uses 127.0.0.1.
     host: str = os.getenv("HOST", "0.0.0.0").strip() or "0.0.0.0"
     port: int = _int("PORT", 7860) or 7860
+    # Set by the tester launcher: quiet terminal, and the call page offers "save my results".
+    tester_mode: bool = os.getenv("TESTER_MODE", "").strip() == "1"
 
     # The latency KPI threshold the client asked for, and the working target in the design doc.
     latency_target_ms: int = 600

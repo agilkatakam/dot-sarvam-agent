@@ -106,11 +106,15 @@ def db():
 
 def init() -> None:
     with db() as c:
-        c.executescript(SCHEMA)
-        existing = {r["name"] for r in c.execute("PRAGMA table_info(calls)")}
-        for col in ADDED_COLUMNS:
-            if col.split()[0] not in existing:
-                c.execute(f"ALTER TABLE calls ADD COLUMN {col}")
+        ensure_schema(c)
+
+
+def ensure_schema(c: sqlite3.Connection) -> None:
+    c.executescript(SCHEMA)
+    existing = {r[1] for r in c.execute("PRAGMA table_info(calls)")}
+    for col in ADDED_COLUMNS:
+        if col.split()[0] not in existing:
+            c.execute(f"ALTER TABLE calls ADD COLUMN {col}")
 
 
 # --- calls ------------------------------------------------------------------
@@ -145,7 +149,7 @@ def insert_turn(call_id: str, kind: str, latency_ms: int, stt_ms=None, llm_ms=No
 def all_calls() -> list[dict]:
     with db() as c:
         rows = c.execute("SELECT * FROM calls ORDER BY started_at DESC").fetchall()
-    return [_row(r) for r in rows]
+    return [decode_call(r) for r in rows]
 
 
 def get_call(call_id: str) -> dict | None:
@@ -154,7 +158,7 @@ def get_call(call_id: str) -> dict | None:
         turns = c.execute("SELECT * FROM turns WHERE call_id = ? ORDER BY at", (call_id,)).fetchall()
     if r is None:
         return None
-    out = _row(r)
+    out = decode_call(r)
     out["turns"] = [dict(t) for t in turns]
     return out
 
@@ -164,7 +168,7 @@ def all_turns() -> list[dict]:
         return [dict(t) for t in c.execute("SELECT * FROM turns").fetchall()]
 
 
-def _row(r: sqlite3.Row) -> dict:
+def decode_call(r: sqlite3.Row) -> dict:
     d = dict(r)
     d["transcript"] = json.loads(d["transcript"] or "[]")
     if d.get("runtime_settings"):

@@ -65,13 +65,19 @@ def _scrub(text: str) -> str:
     return text.replace(key, "[SARVAM_API_KEY]") if key else text
 
 
-def _safe(name: str) -> str:
+def safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-") or "tester"
+
+
+def default_folder() -> Path:
+    """Where a tester will look for a saved file: their Downloads folder."""
+    downloads = Path.home() / "Downloads"
+    return downloads if downloads.is_dir() else Path.home()
 
 
 def bundle_name() -> str:
     testers = sorted({c["tester"] for c in db.all_calls() if c.get("tester")})
-    who = _safe("+".join(testers)) if testers else "tester"
+    who = safe_name("+".join(testers)) if testers else "tester"
     return f"dot-test-results-{who}-{datetime.now():%Y%m%d-%H%M}.zip"
 
 

@@ -26,11 +26,20 @@
   .filler { opacity:.6; font-style:italic; }
   .hint { color:var(--muted); font-size:13px; margin-top:18px; }
   label { display:block; font-size:14px; color:var(--muted); margin-bottom:6px; }
+  .card + .card { margin-top:16px; }
+  h2 { font-size:17px; margin:0 0 8px; }
+  ul.roles { margin:0; padding-left:20px; font-size:15px; }
+  ul.roles li { margin:4px 0; }
+  button.done { background:var(--ink); color:var(--bg); margin-top:12px; }
+  .banner { background:var(--danger); color:#fff; border-radius:12px; padding:14px 16px; margin-bottom:16px; font-weight:600; }
+  .ok { background:var(--accent); color:#fff; border-radius:12px; padding:14px 16px; margin-top:12px; font-size:15px; }
+  .count { font-size:15px; }
   #tester { width:100%; font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:14px; }
 </style>
 </head>
 <body>
 <main>
+  <div class="banner" id="banner" hidden></div>
   <h1>Talk to the DOT voice agent</h1>
   <p class="sub">A test call with an AI assistant. Pretend you're a college receptionist, placement head, dean or librarian.</p>
   <div class="card">
@@ -43,6 +52,25 @@
   </div>
   <p class="hint" id="ref"></p>
   <p class="hint">Uses your microphone. Headphones give the best results. Calls are recorded for quality review.</p>
+
+  <div id="testerKit" hidden>
+    <div class="card">
+      <h2>Who should I pretend to be?</h2>
+      <ul class="roles">
+        <li><b>Receptionist</b>: busy, asks "who is this?", maybe won't put them through.</li>
+        <li><b>Placement officer</b>: ask hard questions, then agree to a meeting.</li>
+        <li><b>Dean or principal</b>: very short on time.</li>
+        <li><b>Librarian</b>: speak in Hindi or Hinglish.</li>
+        <li><b>Difficult person</b>: interrupt, change the topic, say "don't call again", or stay silent.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Finished testing?</h2>
+      <div class="count" id="count">You haven't made a call yet. Please try at least 5.</div>
+      <button class="done" id="done">I'm finished: save my results</button>
+      <div class="ok" id="saved" hidden></div>
+    </div>
+  </div>
 </main>
 <script>
 const RATE = 16000;
@@ -50,6 +78,47 @@ const btn = document.getElementById('btn'), statusEl = document.getElementById('
       logEl = document.getElementById('log'), lvl = document.getElementById('lvl'),
       testerEl = document.getElementById('tester');
 testerEl.value = localStorage.getItem('tester') || '';
+const banner = document.getElementById('banner');
+let kit = false, serverUp = true;
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/tester?name=' + encodeURIComponent(testerEl.value.trim()));
+    const t = await r.json();
+    if (!serverUp) { banner.hidden = true; serverUp = true; }
+    if (!t.tester_mode) return;
+    kit = true; document.getElementById('testerKit').hidden = false;
+    if (!t.has_key) { banner.hidden = false; banner.textContent = 'The Sarvam key is missing. Close the black window and double-click Start again.'; }
+    const n = t.my_calls;
+    document.getElementById('count').textContent = n === 0 ? "You haven't made a call yet. Please try at least 5."
+      : `You've made ${n} call${n === 1 ? '' : 's'}.` + (n < 5 ? ` Try ${5 - n} more if you can.` : ' Great, that is plenty. Save your results whenever you are ready.');
+  } catch (e) {
+    if (ws) return;
+    serverUp = false; banner.hidden = false;
+    banner.textContent = 'The agent has stopped (its black window was closed). Double-click Start again, then reload this page.';
+  }
+}
+refresh(); setInterval(() => { if (!ws) refresh(); }, 5000);
+testerEl.addEventListener('change', refresh);
+
+document.getElementById('done').onclick = async () => {
+  const b = document.getElementById('done'), out = document.getElementById('saved');
+  b.disabled = true; b.textContent = 'Saving…'; out.hidden = true;
+  try {
+    const r = await fetch('/results.zip');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const name = (/filename="?([^"]+)"?/.exec(r.headers.get('content-disposition') || '') || [])[1] || 'dot-test-results.zip';
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    out.hidden = false;
+    out.innerHTML = `<b>Saved!</b> A file called <b>${name.replace(/[<>&]/g, '')}</b> is in your <b>Downloads</b> folder.<br><br>
+      Send it to Akhil on WhatsApp: open the chat, tap 📎 (or +), choose <b>Document</b>, and pick that file.<br><br>
+      That's it. Thank you! You can close this page and the black window now.`;
+  } catch (e) {
+    out.hidden = false; out.textContent = "Couldn't save the results. Make sure the black window is still open, then try again.";
+  }
+  b.disabled = false; b.textContent = "I'm finished: save my results";
+};
 let ws, ctx, stream, player, mic, ending = false;
 
 const WORKLETS = `
@@ -103,11 +172,18 @@ async function start() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1}});
   } catch (e) { setStatus('Microphone permission is needed to call.'); btn.disabled = false; return; }
-  ctx = new AudioContext({sampleRate: RATE});
-  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLETS], {type: 'application/javascript'})));
-  player = new AudioWorkletNode(ctx, 'player'); player.connect(ctx.destination);
-  let queued = 0; player.port.onmessage = e => { queued = e.data; if (ending && queued === 0) hangUp('Call ended by agent'); };
-  mic = new AudioWorkletNode(ctx, 'mic'); ctx.createMediaStreamSource(stream).connect(mic);
+  let queued = 0;
+  try {
+    ctx = new AudioContext({sampleRate: RATE});
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLETS], {type: 'application/javascript'})));
+    player = new AudioWorkletNode(ctx, 'player'); player.connect(ctx.destination);
+    player.port.onmessage = e => { queued = e.data; if (ending && queued === 0) hangUp('Call ended by agent'); };
+    mic = new AudioWorkletNode(ctx, 'mic'); ctx.createMediaStreamSource(stream).connect(mic);
+  } catch (e) {
+    // Firefox can't connect a microphone to a 16 kHz audio context.
+    hangUp('This browser can\'t run the call. Please open ' + location.href + ' in Chrome or Edge.');
+    return;
+  }
 
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/browser?tester=' + encodeURIComponent(tester));
   ws.binaryType = 'arraybuffer';
@@ -134,6 +210,7 @@ function hangUp(msg) {
   if (ctx && ctx.state !== 'closed') ctx.close();
   ws = ctx = stream = null; lvl.style.width = '0';
   btn.textContent = 'Start call'; btn.className = ''; btn.disabled = false; setStatus(msg || 'Call ended');
+  setTimeout(refresh, 1500);  // the call's row is written as it ends
 }
 
 btn.onclick = () => (ws ? hangUp('You hung up') : start());

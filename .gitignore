@@ -7,3 +7,5 @@ data/
 secrets/
 *.egg-info/
 dot-test-results-*.zip
+dist/
+results/

@@ -1,0 +1,73 @@
+DOT VOICE AGENT - HOW TO TEST
+=============================
+
+Thanks for helping! You'll talk to an AI that phones colleges. You pretend to be
+the person at the college who picks up. About 20 minutes in total.
+
+You need:
+  * A Windows laptop/PC, or a Mac with an Apple chip. (To check a Mac: Apple
+    menu > About This Mac. It should say "Chip: Apple M1" or M2, M3, M4...)
+  * Google Chrome or Microsoft Edge.
+  * Headphones with a mic are best, but the laptop's own mic works too.
+  * Internet.
+
+
+STEP 1 - START IT
+-----------------
+
+WINDOWS
+  1. Right-click the zip file > "Extract All" > "Extract".
+  2. In the folder that opens, double-click "Start (Windows)".
+  3. If a blue box says "Windows protected your PC", click "More info", then
+     "Run anyway". If a box asks "Do you want to run this file?", click "Run".
+
+MAC
+  1. Double-click the zip file. A folder appears next to it. Open it.
+  2. Double-click "Start (Mac)".
+  3. If it says Apple "could not verify" it, click "Done". Then:
+     open System Settings > Privacy & Security, scroll down, click
+     "Open Anyway" next to "Start (Mac)", and confirm.
+     (Only needed the first time.)
+
+A black window opens. THE VERY FIRST TIME it downloads what it needs. This
+takes about 5 minutes. Just wait.
+
+Then your browser opens the call page by itself.
+Leave the black window open the whole time you're testing.
+
+
+STEP 2 - MAKE CALLS
+-------------------
+
+  1. Type your name in the box.
+  2. Click "Start call". If the browser asks to use the microphone, click "Allow".
+  3. The AI speaks first. Answer it like a real person at a college would.
+     The page has ideas for who to pretend to be.
+  4. Hang up whenever you like.
+
+Please make at least 5 calls, each as a different person. Calls that go
+badly are just as useful as good ones.
+
+If something odd happens, note the "Call reference" shown under the call
+box and what went wrong.
+
+
+STEP 3 - SEND YOUR RESULTS
+--------------------------
+
+  1. On the call page, click "I'm finished: save my results".
+  2. A file starting with "dot-test-results" goes into your Downloads folder.
+  3. Send that file to Akhil on WhatsApp: open the chat, tap the paperclip
+     (or +), choose "Document", and pick the file. Add your notes too.
+  4. Close the browser page and the black window. Done!
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+
+  * The page says the agent has stopped: double-click Start again.
+  * The browser didn't open: open Chrome and go to  localhost:7860
+  * "This browser can't run the call": copy the address into Chrome or Edge.
+  * The AI can't hear you: check the mic. Click the icon left of the address
+    bar and set Microphone to "Allow". Then reload the page.
+  * Anything else: send Akhil a photo of the black window.

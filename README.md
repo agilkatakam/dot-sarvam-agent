@@ -34,14 +34,26 @@ caller (browser or phone) ⇄ this server ⇄ Sarvam STT (saaras:v3-realtime)
 
 ### Friends testing on their own computers
 
-Send them the repo and [TESTING.md](TESTING.md). `start.bat` (Windows) or `start.command`
-(Mac/Linux) installs everything through uv, asks once for the Sarvam key, and opens the call
-page. Testers type their name before each call. Pressing Ctrl+C saves
-`dot-test-results-<name>-<date>.zip`, or they can run `export-results` at any time. The zip holds
-`calls.csv`, readable `transcripts/`, `calls.db`, `recordings/` and `logs/`, with the key removed.
+**1. Make the kit** (one zip, about 0.3 MB):
+```bash
+uv run python -m scripts.make_tester_kit --with-key   # your key inside, so friends paste nothing
+```
+This writes `dist/DOT-Voice-Agent-Test.zip`. Send it on WhatsApp as a Document. Use `--no-key` instead to have each friend paste their own key on first run.
 
-To browse a tester's results in your own dashboard, unzip it and run
-`DATA_DIR=/path/to/unzipped .venv/bin/python -m agent.server`.
+**2. Friends follow `READ ME FIRST.txt`** inside the zip: unzip, double-click **Start**, make
+calls in the browser page that opens, then click **"I'm finished: save my results"**. That
+puts `dot-test-results-<name>-<date>.zip` in their Downloads folder, and they send it back.
+The first start downloads about 5 minutes of setup; later starts take seconds. Windows, Linux
+and Apple Silicon Macs (macOS 14+) are supported; Intel Macs are not.
+
+**3. Merge everything they send** and open it in the dashboard:
+```bash
+uv run python -m scripts.merge_results ~/Downloads/dot-test-results-*.zip
+```
+This writes `results/` (gitignored), which holds `all_calls.csv` (one spreadsheet with a `tester` column),
+`transcripts/`, `recordings/`, each tester's `logs/`, and the database. It then serves the
+dashboard on <http://localhost:7860/dashboard>. Running it again with new zips adds only the
+new calls.
 
 ### Let anyone call it (free public link)
 
