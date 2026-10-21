@@ -66,16 +66,28 @@ def today_text(at: datetime | None = None) -> str:
     return f"{at.strftime('%A')} {at.day} {at.strftime('%B %Y')}"
 
 
-def calendar_days_text(at: datetime | None = None, days: int = 14) -> str:
-    """One line per day so the model never has to work out weekdays itself."""
+def calendar_days_text(at: datetime | None = None, days: int = 14, per_day: int = 3) -> str:
+    """The meeting days of the next two weeks with a few real free slots each, preloaded so
+    the model can offer times without a check_availability round trip. One line per day so
+    it never has to work out weekdays itself; [HH:MM] is what book_meeting takes."""
     at = at or now()
-    start, end = settings.working_hours_start, settings.working_hours_end
+    week = [at.date() + timedelta(days=i) for i in range(days)]
+    try:
+        free = free_slots_range(week, at)
+    except Exception as e:  # noqa: BLE001 - fall back to the plain list; the tool still works
+        logger.error(f"preloading free slots failed: {e}")
+        free = None
     lines = []
-    for i in range(days):
-        d = at.date() + timedelta(days=i)
-        label = "today" if i == 0 else "tomorrow" if i == 1 else ""
-        note = f"meetings {start} to {end}" if is_working_day(d) else "no meetings"
-        lines.append(f"{d.strftime('%A')} {d.day} {d.strftime('%B')} = {d.isoformat()}{' (' + label + ')' if label else ''}: {note}")
+    for d in week:
+        if not is_working_day(d):
+            continue
+        label = " today" if d == at.date() else " tomorrow" if d == at.date() + timedelta(days=1) else ""
+        if free is None:
+            times = "use check_availability"
+        else:
+            slots = _spread(free.get(d, []), per_day)
+            times = ", ".join(f"{spoken_time(s)} [{s.strftime('%H:%M')}]" for s in slots) or "fully booked"
+        lines.append(f"{d.strftime('%a %d %b')}{label} = {d.isoformat()}: {times}")
     return "\n".join(lines)
 
 
@@ -163,6 +175,19 @@ def free_slots(day: date, part_of_day: str = "any", at: datetime | None = None) 
     return slots
 
 
+def free_slots_range(days: list[date], at: datetime | None = None) -> dict[date, list[datetime]]:
+    """free_slots for several days with one busy-time lookup."""
+    cand = {d: candidate_slots(d, at) for d in days}
+    cand = {d: s for d, s in cand.items() if s}
+    if not cand:
+        return {}
+    length = timedelta(minutes=settings.meeting_minutes)
+    first, last = min(s[0] for s in cand.values()), max(s[-1] for s in cand.values())
+    busy = _busy(first, last + length)
+    return {d: [s for s in slots if not any(s < b_end and s + length > b_start for b_start, b_end in busy)]
+            for d, slots in cand.items()}
+
+
 def _spread(slots: list[datetime], n: int) -> list[datetime]:
     """Up to n slots spread across the day rather than the first n back to back."""
     if len(slots) <= n:
@@ -200,7 +225,7 @@ def _parse_start(start_iso: str) -> datetime:
     try:
         start = datetime.fromisoformat(start_iso.strip())
     except (AttributeError, ValueError):
-        raise BookingError("start_iso must be one of the start_iso values check_availability returned.") from None
+        raise BookingError("start_iso must be YYYY-MM-DDTHH:MM for one of the free times.") from None
     return start.replace(tzinfo=tz()) if start.tzinfo is None else start.astimezone(tz())
 
 

@@ -21,7 +21,7 @@ SERIOUSNESS = ["genuine", "gatekeeper", "time_waster", "unclear"]
 
 CHECK_AVAILABILITY = FunctionSchema(
     name="check_availability",
-    description="Look up free walkthrough slots on the team calendar for one day. Call before offering any time.",
+    description="Look up free walkthrough slots for one day. Only needed if the free times listed in your instructions don't suit them.",
     properties={
         "date": {"type": "string", "description": "The day, as YYYY-MM-DD, taken from the calendar list in your instructions."},
         "part_of_day": {"type": "string", "enum": ["any", "morning", "afternoon"], "description": "Narrow to morning or afternoon if they said so."},
@@ -31,9 +31,9 @@ CHECK_AVAILABILITY = FunctionSchema(
 
 BOOK_MEETING = FunctionSchema(
     name="book_meeting",
-    description="Book the walkthrough once the person has agreed to one of the times check_availability returned.",
+    description="Book the walkthrough once the person has agreed to one of the free times.",
     properties={
-        "start_iso": {"type": "string", "description": "The exact start_iso of the agreed slot, copied from check_availability."},
+        "start_iso": {"type": "string", "description": "Date and time of the agreed slot as YYYY-MM-DDTHH:MM, e.g. 2026-10-19T13:00 (from the [HH:MM] in your instructions or a start_iso from check_availability)."},
         "contact_name": {"type": "string", "description": "Who the meeting is with."},
         "contact_title": {"type": "string", "description": "Their role, if known."},
         "institution": {"type": "string", "description": "Institution name, if known."},

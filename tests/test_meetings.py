@@ -59,6 +59,6 @@ def test_ics_has_the_meeting():
     assert "BEGIN:VEVENT" in text and "ATTENDEE;RSVP=TRUE:mailto:rao@college.in" in text and "Ms Rao" in text
 
 
-def test_calendar_days_text_lists_two_weeks():
+def test_calendar_days_text_lists_meeting_days_with_slots():
     lines = meetings.calendar_days_text().splitlines()
-    assert len(lines) == 14 and all("=" in line for line in lines)
+    assert 8 <= len(lines) <= 14 and all("=" in line for line in lines)

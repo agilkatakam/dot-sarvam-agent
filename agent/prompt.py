@@ -45,7 +45,7 @@ VARIABLES = {
     "org": "Brand name from ORG_NAME in .env",
     "opening_line": "The opening line, after {org} is filled in",
     "today": "Today's date and weekday, e.g. Tuesday 14 October 2026",
-    "calendar_days": "The next 14 days with weekdays and which take meetings",
+    "calendar_days": "Meeting days of the next 14 days, each with up to 3 free slots",
     "meeting_minutes": "Walkthrough length, from MEETING_MINUTES",
     "timezone": "Timezone, from TIMEZONE",
     "next_steps": "Allowed next_step values for end_call",

@@ -21,7 +21,9 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     EndFrame,
+    EndWorkerFrame,
     MetricsFrame,
+    SpeechOutputAudioRawFrame,
     OutputTransportMessageUrgentFrame,
     TTSSpeakFrame,
 )
@@ -45,12 +47,16 @@ from pipecat.turns.user_stop import ExternalUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-from agent import db, meetings, prompt, runtime
+from agent import audio_cache, db, meetings, prompt, runtime
 from agent.config import settings
 from agent.tools import HANDLERS, build_tools
 
 SAMPLE_RATE = 16000
 FILLERS = ("One moment.", "Okay, just a second.", "Right, give me a moment.")
+IDLE_NUDGE = "Hello, are you still there?"
+IDLE_BYE = "I'll let you go. Thank you, goodbye!"
+LIMIT_BYE = "We've reached the time limit for this call. Thank you, goodbye!"
+FIXED_LINES = (*FILLERS, IDLE_NUDGE, IDLE_BYE, LIMIT_BYE)
 
 
 @dataclass
@@ -213,6 +219,20 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
             if task:
                 task.cancel()
 
+        async def say(line: str, end_reason: str | None = None):
+            """A fixed line: pre-recorded audio straight to the output (no TTS cost or delay),
+            or live TTS if it isn't cached yet. Optionally hang up once it has played."""
+            audio = audio_cache.cached(line, rt, SAMPLE_RATE)
+            if audio is None:
+                frames = [TTSSpeakFrame(line, append_to_context=False)]
+                await worker.queue_frames(frames + ([EndFrame()] if end_reason else []))
+                return
+            # Pushed from the TTS stage so the agent's own audio never goes through STT/VAD.
+            # Speech frames, so the output marks the bot as speaking (connected, latency, interruptions).
+            await tts.push_frame(SpeechOutputAudioRawFrame(audio=audio, sample_rate=SAMPLE_RATE, num_channels=1))
+            if end_reason:
+                await tts.push_frame(EndWorkerFrame(reason=end_reason))
+
         async def mark_connected():
             started["connected"] = time.monotonic()
             call.record["connected_at"] = db.now()
@@ -263,7 +283,7 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
             call.record["filler_count"] = call.record.get("filler_count", 0) + 1
             line = FILLERS[(call.record["filler_count"] - 1) % len(FILLERS)]
             await caption("agent", line + " [filler]")
-            await worker.queue_frame(TTSSpeakFrame(line, append_to_context=False))
+            await say(line)
 
         call.caption = caption
 
@@ -287,12 +307,12 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
                 return
             if nudges == 0:
                 call.record["idle_nudges"] = 1
-                await caption("agent", "Hello, are you still there?")
-                await worker.queue_frame(TTSSpeakFrame("Hello, are you still there?", append_to_context=False))
+                await caption("agent", IDLE_NUDGE)
+                await say(IDLE_NUDGE)
             else:
                 call.record["end_reason"] = "idle"
-                await caption("agent", "I'll let you go. Thank you, goodbye!")
-                await worker.queue_frames([TTSSpeakFrame("I'll let you go. Thank you, goodbye!", append_to_context=False), EndFrame()])
+                await caption("agent", IDLE_BYE)
+                await say(IDLE_BYE, end_reason="idle")
 
         @assistant_agg.event_handler("on_assistant_turn_stopped")
         async def _agent_said(_agg, message):
@@ -338,7 +358,12 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
                 await worker.queue_frame(OutputTransportMessageUrgentFrame(message={"type": "call", "id": call.id}))
             await caption("agent", greeting)
             # Spoken verbatim, not generated: the AI disclosure can't be skipped or reworded.
-            await worker.queue_frame(TTSSpeakFrame(greeting))
+            # Pre-recorded after the first call, so it starts instantly and costs nothing.
+            if await audio_cache.get(greeting, rt, SAMPLE_RATE) is not None:
+                context.add_message({"role": "assistant", "content": greeting})
+                await say(greeting)
+            else:
+                await worker.queue_frame(TTSSpeakFrame(greeting))
 
         @transport.event_handler("on_client_disconnected")
         async def _disconnected(_transport, _client):
@@ -350,11 +375,10 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
             await asyncio.sleep(rt["max_call_seconds"])
             if "end_reason" not in call.record:
                 call.record["end_reason"] = "timeout"
-                await worker.queue_frames(
-                    [TTSSpeakFrame("We've reached the time limit for this call. Thank you, goodbye!"), EndFrame()]
-                )
+                await say(LIMIT_BYE, end_reason="timeout")
 
         timers["limit"] = asyncio.create_task(_call_time_limit())
+        timers["warm"] = asyncio.create_task(audio_cache.warm(list(FIXED_LINES), rt, SAMPLE_RATE))
         try:
             runner = WorkerRunner(handle_sigint=False)
             await runner.add_workers(worker)
