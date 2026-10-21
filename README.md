@@ -36,9 +36,12 @@ caller (browser or phone) ⇄ this server ⇄ Sarvam STT (saaras:v3-realtime)
 
 **1. Make the kit** (one zip, about 0.3 MB):
 ```bash
-uv run python -m scripts.make_tester_kit --with-key   # your key inside, so friends paste nothing
+uv run python -m scripts.make_tester_kit
 ```
-This writes `dist/DOT-Voice-Agent-Test.zip`. Send it on WhatsApp as a Document. Use `--no-key` instead to have each friend paste their own key on first run.
+This writes `dist/DOT-Voice-Agent-Test.zip`. Send it on WhatsApp as a Document. Each friend
+signs up at dashboard.sarvam.ai for their own free key (₹100 credit, about 15 calls). The
+first start asks for the key, checks it with Sarvam, and asks again if it's wrong. To put
+your own key in the kit instead, add `--with-key`.
 
 **2. Friends follow `READ ME FIRST.txt`** inside the zip: unzip, double-click **Start**, make
 calls in the browser page that opens, then click **"I'm finished: save my results"**. That

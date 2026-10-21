@@ -10,9 +10,22 @@ You need:
   * Google Chrome or Microsoft Edge.
   * Headphones with a mic are best, but the laptop's own mic works too.
   * Internet.
+  * A free Sarvam account (Step 1 below, 2 minutes).
 
 
-STEP 1 - START IT
+STEP 1 - GET YOUR FREE SARVAM KEY
+---------------------------------
+
+Sarvam is the company that powers the AI's voice. A free account comes with
+Rs 100 of credit, which is enough for about 15 calls. You won't be asked to pay.
+
+  1. Go to  https://dashboard.sarvam.ai  and sign up.
+  2. Once you're in, find "API Keys" in the menu.
+  3. Copy your key (a long line of letters and numbers). Keep it handy:
+     you'll paste it once in Step 2.
+
+
+STEP 2 - START IT
 -----------------
 
 WINDOWS
@@ -29,14 +42,16 @@ MAC
      "Open Anyway" next to "Start (Mac)", and confirm.
      (Only needed the first time.)
 
-A black window opens. THE VERY FIRST TIME it downloads what it needs. This
-takes about 5 minutes. Just wait.
+A black window opens. THE VERY FIRST TIME:
+  * It downloads what it needs. This takes about 5 minutes. Just wait.
+  * It asks for your key. Paste it (Ctrl+V on Windows, Cmd+V on Mac) and
+    press Enter. It checks the key with Sarvam and remembers it.
 
 Then your browser opens the call page by itself.
 Leave the black window open the whole time you're testing.
 
 
-STEP 2 - MAKE CALLS
+STEP 3 - MAKE CALLS
 -------------------
 
   1. Type your name in the box.
@@ -52,7 +67,7 @@ If something odd happens, note the "Call reference" shown under the call
 box and what went wrong.
 
 
-STEP 3 - SEND YOUR RESULTS
+STEP 4 - SEND YOUR RESULTS
 --------------------------
 
   1. On the call page, click "I'm finished: save my results".
@@ -65,6 +80,10 @@ STEP 3 - SEND YOUR RESULTS
 IF SOMETHING GOES WRONG
 -----------------------
 
+  * "Sarvam says that key isn't valid": copy the key again from
+    dashboard.sarvam.ai (the whole thing) and paste it again.
+  * Calls stop working after a while: your free credit may have run out.
+    Check your balance on dashboard.sarvam.ai and tell Akhil.
   * The page says the agent has stopped: double-click Start again.
   * The browser didn't open: open Chrome and go to  localhost:7860
   * "This browser can't run the call": copy the address into Chrome or Edge.

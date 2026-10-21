@@ -1,6 +1,7 @@
 """One-step start for testers (run by start.command / start.bat).
 
-First run: asks for the Sarvam API key if the kit didn't come with one, and writes .env.
+First run: asks for the tester's own Sarvam API key, checks it with Sarvam, and writes .env.
+A saved key that stops working is asked for again.
 Every run: starts the server on this computer only, in tester mode (quiet window, "save my
 results" on the call page), and opens the call page once the server answers. If it's already
 running, it just opens the page again. Stopping with Ctrl+C also saves the results zip.
@@ -13,6 +14,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -33,23 +35,51 @@ def _key_in_env() -> str:
     return m.group(1).strip() if m else ""
 
 
+def key_status(key: str) -> str:
+    """'ok', 'bad' or 'unknown' (offline). An empty-text request is rejected before any charge:
+    400 with a real key, 403 with a wrong one."""
+    req = urllib.request.Request(
+        "https://api.sarvam.ai/text-to-speech", method="POST",
+        data=json.dumps({"text": "", "target_language_code": "en-IN"}).encode(),
+        headers={"api-subscription-key": key, "content-type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return "ok"
+    except urllib.error.HTTPError as e:
+        return "bad" if e.code in (401, 403) else "ok"
+    except Exception:  # noqa: BLE001 - no internet right now; don't block on the check
+        return "unknown"
+
+
 def first_run_setup() -> None:
-    if _key_in_env():
+    saved = _key_in_env()
+    if saved and key_status(saved) != "bad":
         return
-    say("One-time setup: this needs a Sarvam API key.")
-    say("Paste the key Akhil sent you, then press Enter.")
-    key = ""
-    while len(key) < 10:
+    if saved:
+        say("Your saved Sarvam key isn't working any more, so let's enter it again.")
+    else:
+        say("One-time setup: this needs your Sarvam API key.")
+    say("(Don't have one yet? See STEP 1 in READ ME FIRST.txt.)")
+    say("Copy your key from dashboard.sarvam.ai, paste it here, then press Enter.")
+    while True:
         key = input("Key: ").strip().strip('"').strip("'")
         if len(key) < 10:
             say("That doesn't look like a key. Copy the whole key and paste it here.")
+            continue
+        status = key_status(key)
+        if status == "bad":
+            say("Sarvam says that key isn't valid. Copy it again (the whole thing) and paste it here.")
+            continue
+        if status == "unknown":
+            say("(Couldn't check the key right now: is the internet on? Saving it anyway.)")
+        break
     text = ENV.read_text(encoding="utf-8") if ENV.exists() else (ROOT / ".env.example").read_text(encoding="utf-8")
     if re.search(r"^SARVAM_API_KEY=", text, re.M):
         text = re.sub(r"^SARVAM_API_KEY=.*$", lambda _m: f"SARVAM_API_KEY={key}", text, flags=re.M)
     else:
         text = f"SARVAM_API_KEY={key}\n" + text
     ENV.write_text(text, encoding="utf-8")
-    say("Saved. You won't be asked again.\n")
+    say(("Key works and is saved." if status == "ok" else "Key saved.") + " You won't be asked again.\n")
 
 
 def _ours(port: int) -> bool:

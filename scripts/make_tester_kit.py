@@ -1,8 +1,7 @@
 """Build the zip you send to testers.
 
-  python -m scripts.make_tester_kit              asks whether to include your Sarvam key
-  python -m scripts.make_tester_kit --with-key   include the key from .env (testers paste nothing)
-  python -m scripts.make_tester_kit --no-key     testers paste a key on first run
+  python -m scripts.make_tester_kit              testers paste their own Sarvam key on first run
+  python -m scripts.make_tester_kit --with-key   include your key from .env instead (uses your credit)
 
 Writes dist/DOT-Voice-Agent-Test.zip. Unzipped, testers see only:
 
@@ -88,13 +87,7 @@ def build(dest: Path, key: str | None) -> Path:
 
 def main() -> None:
     key = _local_key()
-    if "--no-key" in sys.argv:
-        include = False
-    elif "--with-key" in sys.argv:
-        include = True
-    else:
-        say = "Include your Sarvam key so testers don't have to paste one? Their calls will use your credit. [y/N] "
-        include = input(say).strip().lower().startswith("y")
+    include = "--with-key" in sys.argv
     if include and not key:
         sys.exit("No SARVAM_API_KEY in .env to include.")
     dest = build(ROOT / "dist" / "DOT-Voice-Agent-Test.zip", key if include else None)
