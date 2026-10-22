@@ -9,3 +9,4 @@ secrets/
 dot-test-results-*.zip
 dist/
 results/
+.DS_Store
