@@ -66,16 +66,26 @@ FIELDS = (
           "Characters of reply buffered before audio is generated. Lower = faster start, slightly less natural prosody.",
           min=10, max=200),
     # --- listening / turn-taking
-    Field("stt_language", "Listening", "Caller language", "choice", _env("SARVAM_STT_LANGUAGE", "en-IN"),
-          "en-IN for Indian English; hi-IN (with codemix) for Hinglish callers.", choices=STT_LANGUAGES),
-    Field("stt_mode", "Listening", "Transcript mode", "choice", _env("SARVAM_STT_MODE", "transcribe"),
-          "codemix keeps Hinglish as spoken (mixed scripts).", choices=("transcribe", "codemix", "translit", "translate", "verbatim")),
+    Field("stt_language", "Listening", "Caller language", "choice", _env("SARVAM_STT_LANGUAGE", "hi-IN"),
+          "hi-IN with codemix understands English, Hindi and Hinglish callers. en-IN forces everything into English, "
+          "so Hindi speech gets mangled.", choices=STT_LANGUAGES),
+    Field("stt_mode", "Listening", "Transcript mode", "choice", _env("SARVAM_STT_MODE", "codemix"),
+          "codemix keeps Hinglish as spoken: English words in English letters, Hindi in Devanagari.",
+          choices=("transcribe", "codemix", "translit", "translate", "verbatim")),
+    Field("stt_stream_type", "Listening", "Recognition speed", "choice", _env("SARVAM_STT_STREAM_TYPE", "balanced"),
+          "balanced is more accurate on names and emails; fast returns words a little sooner but mishears more.",
+          choices=("balanced", "fast")),
+    Field("stt_prompt", "Listening", "Recognition hint", "text",
+          _env("SARVAM_STT_PROMPT", "Phone call to an Indian school or college about Dot, a news app. "
+               "Names, job titles and email addresses."),
+          "Context that helps speech recognition with expected words. Leave empty to turn off."),
     Field("turn_mode", "Listening", "End-of-turn detection", "choice", _env("TURN_MODE", "smart"),
           "smart: on-device voice detector + Smart Turn model decide when the caller finished (fast, and waits "
           "for unfinished sentences). sarvam: Sarvam's server decides after a fixed silence.",
           choices=("smart", "sarvam")),
-    Field("vad_stop_secs", "Listening", "Silence before checking for end of turn (s)", "float", _env("VAD_STOP_SECS", 0.2),
-          "smart mode only.", min=0.1, max=1.5),
+    Field("vad_stop_secs", "Listening", "Silence before checking for end of turn (s)", "float", _env("VAD_STOP_SECS", 0.5),
+          "smart mode only. Every pause this long also cuts the audio sent to speech recognition, so below ~0.4 "
+          "names and emails get split mid-word and misheard.", min=0.1, max=1.5),
     Field("stt_silence_ms", "Listening", "Sarvam silence window (ms)", "int", _env("SARVAM_STT_SILENCE_MS", 400),
           "sarvam mode only. Lower = faster replies, more cut-ins.", min=150, max=2000),
     Field("turn_stop_wait_secs", "Listening", "Wait for late transcript (s)", "float", _env("TURN_STOP_WAIT_SECS", 0.15),

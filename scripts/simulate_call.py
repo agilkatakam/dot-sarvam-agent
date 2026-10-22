@@ -64,6 +64,16 @@ SCENARIOS = {
         "goal": "Speak in Hinglish (mix Hindi and English). You're mildly interested but don't want a meeting. Ask them "
                 "to email details to library@jaipurcollege.ac.in.",
     },
+    "hindi_placement": {
+        "expected": "meeting_booked",
+        "voice": "ritu",
+        "language": "hi-IN",
+        "who": "Smt. Kavita Verma, Placement Officer at a degree college in Lucknow. Your email is kavita.verma@lkocollege.in.",
+        "goal": "Speak only in Hindi, written in Devanagari, the way people talk on the phone (English words like "
+                "placement or meeting are fine). In your very first reply give your name and that you are the "
+                "placement officer. If they ask for your role again, say a little irritated that you already told them. "
+                "Agree to a walkthrough on a weekday morning next week and give your email.",
+    },
     "joker": {
         "expected": "polite_decline",
         "voice": "aditya",
@@ -98,11 +108,11 @@ async def caller_line(client: AsyncOpenAI, s: dict, transcript: list[tuple[str, 
     return (resp.choices[0].message.content or "").strip()
 
 
-async def synthesize(http: httpx.AsyncClient, text: str, voice: str) -> bytes:
+async def synthesize(http: httpx.AsyncClient, text: str, voice: str, language: str = "en-IN") -> bytes:
     r = await http.post(
         "https://api.sarvam.ai/text-to-speech",
         headers={"api-subscription-key": settings.sarvam_api_key},
-        json={"text": text, "target_language_code": "en-IN", "speaker": voice, "model": "bulbul:v3",
+        json={"text": text, "target_language_code": language, "speaker": voice, "model": "bulbul:v3",
               "speech_sample_rate": RATE},
     )
     r.raise_for_status()
@@ -173,7 +183,7 @@ async def run_scenario(name: str, url: str, label: bool, max_turns: int) -> dict
                 print(f"  caller: {line}")
                 transcript.append(("caller", line))
                 said.append(line)
-                audio = await synthesize(http, line, s["voice"])
+                audio = await synthesize(http, line, s["voice"], s.get("language", "en-IN"))
                 for i in range(0, len(audio), CHUNK):
                     outgoing.put_nowait(audio[i:i + CHUNK].ljust(CHUNK, b"\x00"))
                 await asyncio.sleep(len(audio) / (RATE * 2))  # it's being "spoken" in real time

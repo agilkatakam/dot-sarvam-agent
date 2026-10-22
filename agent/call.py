@@ -11,6 +11,7 @@ apply from the next call on. What gets measured here (see agent/kpis.py for aggr
 """
 
 import asyncio
+import re
 import time
 import wave
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from pipecat.frames.frames import (
     MetricsFrame,
     OutputTransportMessageUrgentFrame,
     TTSSpeakFrame,
+    TTSUpdateSettingsFrame,
 )
 from pipecat.metrics.metrics import LLMUsageMetricsData, TTSUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
@@ -51,6 +53,26 @@ from agent.tools import HANDLERS, build_tools
 
 SAMPLE_RATE = 16000
 FILLERS = ("One moment.", "Okay, just a second.", "Right, give me a moment.")
+DEVANAGARI = re.compile(r"[\u0900-\u097F]")
+
+
+def reply_language(caller_text: str, current: str) -> str:
+    """The voice language for the agent's next reply, following the caller between English and Hindi.
+
+    With codemix transcripts, Hindi words arrive in Devanagari and English words in Latin letters.
+    Codemix also writes the odd English phrase in Devanagari ("गो विद 3 PM"), so it takes a mostly
+    Hindi turn to switch to Hindi, and a full English sentence to switch back: a short "okay" from
+    a Hindi speaker must not flip the voice.
+    """
+    words = caller_text.split()
+    if not words:
+        return current
+    hindi = sum(1 for w in words if DEVANAGARI.search(w)) / len(words)
+    if hindi >= 0.5:
+        return "hi-IN"
+    if current == "hi-IN" and hindi < 0.2 and len(words) >= 4:
+        return "en-IN"
+    return current
 
 
 @dataclass
@@ -89,6 +111,18 @@ def estimate_cost(duration_secs: float, llm_in: int, llm_out: int, tts_chars: in
     )
 
 
+def startup_error_message(error: object) -> str:
+    """Turn a provider failure into a useful, key-safe message for a tester."""
+    detail = str(error).lower()
+    if "invalid_api_key" in detail or "403" in detail or "forbidden" in detail:
+        return "Sarvam rejected this API key. Create/copy a new key, save it in .env, then restart Start."
+    if "insufficient_quota" in detail or "402" in detail or "quota" in detail:
+        return "This Sarvam account has no credit left. Add credit in the Sarvam dashboard, then start again."
+    if "rate_limit" in detail or "429" in detail:
+        return "Sarvam is temporarily rate-limiting this account. Wait a minute, then try again."
+    return "Sarvam's voice service couldn't start. Please try once more; if it repeats, send the call reference to Akhil."
+
+
 class _CallObserver(BaseObserver):
     """Watches frames for: first agent audio (connected), agent speech starts (cancels the
     filler timer), and usage metrics (cost). Observers see a frame at every hop, so each
@@ -122,7 +156,10 @@ class _CallObserver(BaseObserver):
 
 def build_services(rt: dict, system_prompt: str):
     key = settings.sarvam_api_key
-    stt_settings = SarvamRealtimeSTTService.Settings(language_code=rt["stt_language"], mode=rt["stt_mode"], stream_type="fast")
+    stt_settings = SarvamRealtimeSTTService.Settings(
+        language_code=rt["stt_language"], mode=rt["stt_mode"], stream_type=rt["stt_stream_type"],
+        prompt=rt["stt_prompt"] or None,
+    )
     if rt["turn_mode"] == "sarvam":
         stt_settings.silence_duration_ms = rt["stt_silence_ms"]
     stt = SarvamRealtimeSTTService(
@@ -191,6 +228,7 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
     worker: PipelineWorker | None = None
     timers: dict[str, asyncio.Task] = {}
     started = {"connected": None, "client": None}
+    voice = {"language": rt["tts_language"]}
 
     try:
         version, doc, system_prompt = call_prompt()
@@ -243,7 +281,7 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
                 if call.send_captions:
                     await worker.queue_frame(
                         OutputTransportMessageUrgentFrame(
-                            message={"type": "error", "text": "The agent couldn't start (check the server's Sarvam key/credit)."}
+                            message={"type": "error", "text": startup_error_message(frame.error)}
                         )
                     )
                 await worker.cancel()
@@ -277,6 +315,14 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
             call.record["idle_nudges"] = 0
             if message.content:
                 await caption("user", message.content)
+                # Only between English and Hindi: another configured language is left alone.
+                if voice["language"] in ("en-IN", "hi-IN"):
+                    language = reply_language(message.content, voice["language"])
+                    if language != voice["language"]:
+                        voice["language"] = language
+                        await worker.queue_frame(
+                            TTSUpdateSettingsFrame(delta=SarvamTTSService.Settings(language=language), service=tts)
+                        )
             if rt["filler_after_secs"] > 0 and "end_reason" not in call.record:
                 cancel_timer("filler")
                 timers["filler"] = asyncio.create_task(filler_after(rt["filler_after_secs"]))
@@ -298,7 +344,9 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
         @assistant_agg.event_handler("on_assistant_turn_stopped")
         async def _agent_said(_agg, message):
             text = (message.content or "").strip()
-            if text and text != greeting:
+            last = call.transcript[-1] if call.transcript else {}
+            # end_call's closing line is already captioned by the tool when it is spoken.
+            if text and text != greeting and (last.get("role"), last.get("text")) != ("agent", text):
                 await caption("agent", text + (" [interrupted]" if message.interrupted else ""))
 
         @latency.event_handler("on_latency_measured")

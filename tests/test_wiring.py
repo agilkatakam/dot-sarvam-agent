@@ -9,6 +9,15 @@ from agent.tools import apply_end_call, tools_json
 PERSONAS = ["placement", "academic_leadership", "library", "reception_only", "unclear"]
 
 
+def test_startup_errors_are_actionable_without_leaking_provider_detail():
+    from agent.call import startup_error_message
+
+    assert "rejected" in startup_error_message("403 invalid_api_key_error").lower()
+    assert "no credit" in startup_error_message("402 insufficient_quota_error").lower()
+    assert "rate-limiting" in startup_error_message("429 rate_limit_exceeded_error").lower()
+    assert "voice service" in startup_error_message("socket disconnected: internal details").lower()
+
+
 def test_apply_end_call_maps_next_step_to_outcome():
     record = {}
     line = apply_end_call(record, {"next_step": "callback_requested", "closing_line": "Talk Thursday!",
@@ -103,3 +112,28 @@ def test_export_bundle_has_tester_transcripts_and_csv(tmp_path):
         assert "Tester: Priya" in body and "USER: Not interested" in body and "480" in body
         row = next(csv.DictReader(io.StringIO(z.read("calls.csv").decode())))
         assert row["tester"] == "Priya" and row["final_outcome"] == "polite_decline"
+
+
+def test_voice_follows_caller_between_english_and_hindi():
+    from agent.call import reply_language
+
+    assert reply_language("Hello, who is this?", "en-IN") == "en-IN"
+    assert reply_language("मैं placement head हूँ", "en-IN") == "hi-IN"
+    assert reply_language("okay", "hi-IN") == "hi-IN"  # a short English word doesn't flip back
+    assert reply_language("Can we continue in English please", "hi-IN") == "en-IN"
+    # codemix sometimes writes an English phrase in Devanagari; that's still an English speaker
+    assert reply_language("गो विद 3 PM on Wednesday the 28th and yes my email is fine", "en-IN") == "en-IN"
+    assert reply_language("हाँ ठीक है", "hi-IN") == "hi-IN"
+
+
+def test_services_use_the_listening_settings():
+    from agent import runtime
+    from agent.call import build_services
+
+    rt = runtime.load()
+    assert (rt["stt_language"], rt["stt_mode"], rt["stt_stream_type"]) == ("hi-IN", "codemix", "balanced")
+    stt, _llm, _tts = build_services(rt, "test prompt")
+    params = stt._query_params()
+    assert params["stream_type"] == "balanced" and params["mode"] == "codemix" and "Dot" in params["prompt"]
+    stt, _llm, _tts = build_services({**rt, "stt_prompt": ""}, "test prompt")
+    assert "prompt" not in stt._query_params()
