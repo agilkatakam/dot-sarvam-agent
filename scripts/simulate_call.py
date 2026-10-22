@@ -93,6 +93,27 @@ SCENARIOS = {
         "goal": "Introduce yourself with your name and role, say it sounds interesting, then say you have to go into "
                 "a class right now.",
     },
+    "tamil_principal": {
+        "expected": "call_again_later",
+        "voice": "kavya",
+        "language": "ta-IN",
+        "who": "Dr. Lakshmi Narayanan, Principal of a women's arts and science college in Coimbatore.",
+        "goal": "Speak only in Tamil, written in Tamil script, like on a phone call. You're curious about it but busy "
+                "with exams this week. Ask them to call back next Tuesday morning.",
+    },
+    "dean_books_english": {
+        "expected": "meeting_booked",
+        "voice": "rahul",
+        "who": "Prof. Sanjay Mehta, Dean of Academics at a private university in Pune. Your email is sanjay.mehta@mitpune.edu.in.",
+        "goal": "You care about making the curriculum current. Ask one sharp question about how Dot fits coursework, "
+                "then agree to a walkthrough on a weekday morning next week and give your email when asked.",
+    },
+    "wrong_number": {
+        "expected": "other",
+        "voice": "amit",
+        "who": "Ramesh, who runs a small hardware shop. This is not a school or college.",
+        "goal": "Sound confused, say this is a hardware shop, not a college, and they have the wrong number.",
+    },
     "joker": {
         "expected": "polite_decline",
         "voice": "aditya",

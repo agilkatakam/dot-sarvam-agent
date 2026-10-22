@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DOT Voice Agent: Live Demo</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1c1c1a; --muted:#6b6a65; --accent:#1f6f4a; --danger:#b3261e; --line:#e4e2dc; --soft:#eef4f0;
+          --hear:#7a9cc6; --think:#c69a5a; --speak:#6aa889; --wait:#b9b6ad; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151514; --card:#1f1f1d; --ink:#ecebe7; --muted:#9a9891; --accent:#4fb487; --danger:#ef6b62; --line:#2e2e2b; --soft:#1d2a23; --wait:#5b5a55; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:1120px; margin:0 auto; padding:28px 18px; }
+  h1 { font-size:22px; margin:0 0 2px; }
+  p.sub { color:var(--muted); margin:0 0 20px; font-size:14px; }
+  .grid { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap:18px; align-items:start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  h2 { font-size:16px; margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+  button { width:100%; border:0; border-radius:999px; padding:15px; font-size:17px; font-weight:600; cursor:pointer; color:#fff; background:var(--accent); }
+  button.hang { background:var(--danger); }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { margin:12px 0 0; text-align:center; color:var(--muted); font-size:14px; min-height:21px; }
+  .meter { height:6px; background:var(--line); border-radius:3px; margin-top:12px; overflow:hidden; }
+  .meter i { display:block; height:100%; width:0; background:var(--accent); transition:width .08s; }
+  #log { margin-top:16px; display:flex; flex-direction:column; gap:8px; max-height:58vh; overflow-y:auto; }
+  .msg { padding:8px 12px; border-radius:12px; font-size:15px; max-width:88%; }
+  .agent { background:var(--line); align-self:flex-start; }
+  .user { background:var(--accent); color:#fff; align-self:flex-end; }
+  .filler { opacity:.6; font-style:italic; }
+  .badge { font-size:12px; font-weight:600; padding:2px 9px; border-radius:999px; background:var(--line); color:var(--muted); }
+  .badge.live { background:var(--danger); color:#fff; }
+  .badge.final { background:var(--accent); color:#fff; }
+  .tiles { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:14px; }
+  .tile { border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+  .tile .k { font-size:12px; color:var(--muted); }
+  .tile .v { font-size:22px; font-weight:650; margin-top:2px; }
+  .tile .v small { font-size:13px; font-weight:500; color:var(--muted); }
+  .bars { display:flex; flex-direction:column; gap:5px; margin:4px 0 6px; }
+  .bar { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+  .bar .lbl { width:56px; flex:none; }
+  .bar .track { flex:1; display:flex; height:14px; border-radius:4px; overflow:hidden; background:var(--line); }
+  .bar .track span { display:block; height:100%; }
+  .bar .ms { width:48px; text-align:right; flex:none; color:var(--ink); }
+  .legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-bottom:12px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+  .outcome { background:var(--soft); border-radius:12px; padding:12px 14px; margin-bottom:12px; }
+  .outcome .big { font-size:20px; font-weight:650; }
+  .outcome .why { color:var(--muted); font-size:13px; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:6px 4px; border-top:1px solid var(--line); vertical-align:top; }
+  td:first-child { color:var(--muted); width:42%; }
+  .empty { color:var(--muted); font-size:14px; padding:20px 0; text-align:center; }
+  .section { margin-top:14px; font-size:13px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .hint { color:var(--muted); font-size:12.5px; margin-top:14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>DOT voice agent: live demo</h1>
+  <p class="sub">Talk to the agent as a college receptionist, placement head, dean or librarian, in English or any Indian language. Its KPIs fill in on the right as the call happens.</p>
+  <div class="grid">
+    <div class="card">
+      <h2>Call</h2>
+      <button id="btn">Start call</button>
+      <div class="meter"><i id="lvl"></i></div>
+      <div id="status">Ready</div>
+      <div id="log"></div>
+      <p class="hint">Uses your microphone; headphones work best. The call is recorded for review.</p>
+    </div>
+    <div class="card">
+      <h2>Call KPIs <span class="badge" id="badge">Waiting for a call</span></h2>
+      <div id="kpis"><div class="empty">Start a call. Reply speed appears live; the outcome and captured details appear the moment the call ends.</div></div>
+    </div>
+  </div>
+</main>
+<script>
+const RATE = 16000;
+const btn = document.getElementById('btn'), statusEl = document.getElementById('status'),
+      logEl = document.getElementById('log'), lvl = document.getElementById('lvl'),
+      kpisEl = document.getElementById('kpis'), badge = document.getElementById('badge');
+let ws, ctx, stream, player, mic, ending = false, callId = null, poller = null, finalTries = 0;
+const watching = !!new URLSearchParams(location.search).get('watch');
+
+const OUTCOME = { meeting_booked: 'Meeting booked', call_again_later: 'Call back later', initial_discussion: 'Initial discussion',
+  polite_decline: 'Polite decline', other: 'Other (wrong number / voicemail)', abandoned: 'Caller hung up early' };
+const NEXT = { meeting_booked: 'Walkthrough booked in the calendar', callback_requested: 'Asked to be called back',
+  asked_for_email: 'Asked for details by email', interested_no_next_step: 'Interested, no next step yet',
+  declined_at_reception: 'Declined at reception', not_interested: 'Not interested', opted_out: 'Asked not to be called again',
+  wrong_number: 'Wrong number', voicemail: 'Voicemail' };
+const PERSONA = { placement: 'Placement / corporate relations', academic_leadership: 'Academic leadership', library: 'Library',
+  reception_only: 'Reception only', unclear: 'Unclear role' };
+const END = { agent_hangup: 'Agent wrapped up', caller_hangup: 'Caller hung up', idle: 'Silence timeout', timeout: 'Time limit', error: 'Error' };
+
+const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const secs = ms => ms == null ? '–' : (ms / 1000).toFixed(1);
+const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+function speed(turns) {
+  const replies = turns.filter(t => t.kind === 'response'), greet = turns.find(t => t.kind === 'greeting');
+  const lat = replies.map(t => t.latency_ms), maxMs = Math.max(2500, ...lat);
+  const bars = replies.slice(-8).map((t, i) => {
+    const n = replies.length - Math.min(8, replies.length) + i + 1, w = v => v ? (v / maxMs * 100) + '%' : '0';
+    const rest = Math.max(0, t.latency_ms - (t.stt_ms || 0) - (t.llm_ms || 0) - (t.tts_ms || 0));
+    return `<div class="bar"><span class="lbl">Reply ${n}</span><span class="track">
+      <span style="width:${w(t.stt_ms)};background:var(--hear)"></span><span style="width:${w(t.llm_ms)};background:var(--think)"></span>
+      <span style="width:${w(t.tts_ms)};background:var(--speak)"></span><span style="width:${w(rest)};background:var(--wait)"></span></span>
+      <span class="ms">${secs(t.latency_ms)} s</span></div>`;
+  }).join('');
+  return `<div class="tiles">
+      <div class="tile"><div class="k">Median reply</div><div class="v">${secs(median(lat))} <small>s</small></div></div>
+      <div class="tile"><div class="k">Replies measured</div><div class="v">${replies.length}</div></div>
+      <div class="tile"><div class="k">Opening line starts</div><div class="v">${secs(greet && greet.latency_ms)} <small>s</small></div></div>
+    </div>
+    ${replies.length ? `<div class="legend"><span><i style="background:var(--hear)"></i>Hearing</span><span><i style="background:var(--think)"></i>Thinking</span><span><i style="background:var(--speak)"></i>Voice</span><span><i style="background:var(--wait)"></i>Turn detection and network</span></div><div class="bars">${bars}</div>` : ''}`;
+}
+
+function render(c, final) {
+  let html = `<div class="section">Speed</div>` + speed(c.turns || []);
+  if (!final) {
+    kpisEl.innerHTML = html + `<div class="empty">Outcome and captured details appear when the call ends.</div>`;
+    return;
+  }
+  const row = (k, v) => v ? `<tr><td>${k}</td><td>${esc(v)}</td></tr>` : '';
+  const contact = row('Name', c.contact_name) + row('Role', c.contact_title) + row('Institution', c.institution) + row('Email', c.contact_email);
+  const step = c.meeting_time ? `Meeting: ${c.meeting_time}` : c.callback_time ? `Call back: ${c.callback_time}` : NEXT[c.next_step] || '';
+  html = `<div class="section">Outcome</div>
+    <div class="outcome"><div class="big">${esc(OUTCOME[c.final_outcome] || c.final_outcome || 'Not recorded')}</div>
+      <div class="why">${esc(step)}${c.opted_out ? ' · added to do-not-call list' : ''}</div>
+      ${c.summary ? `<div class="why" style="margin-top:6px;color:var(--ink)">${esc(c.summary)}</div>` : ''}</div>
+    <table>${row('Persona', PERSONA[c.persona] || c.persona)}${row('Interest', c.interest_level)}${row('Seriousness', c.seriousness)}
+      ${row('How the call ended', END[c.end_reason] || c.end_reason)}
+      ${row('Recorded from', c.outcome_source === 'transcript' ? 'Transcript (caller hung up before the wrap-up)' : c.outcome_source === 'agent' ? "Agent's own wrap-up" : '')}</table>
+    <div class="section">Captured contact</div>
+    ${contact ? `<table>${contact}</table>` : '<div class="empty" style="padding:8px 0">No contact details given.</div>'}
+    ` + html + `
+    <div class="section">Cost</div>
+    <table>${row('Call length', c.duration_secs != null ? c.duration_secs.toFixed(0) + ' s' : '')}
+      ${row('Estimated cost', c.cost_inr != null ? '₹' + c.cost_inr.toFixed(2) + ' (Sarvam, before GST)' : '')}
+      ${row('Words spoken by the agent', c.tts_chars ? c.tts_chars.toLocaleString() + ' characters' : '')}
+      ${row('Caller turns', c.user_turns)}</table>`;
+  kpisEl.innerHTML = html;
+}
+
+async function poll() {
+  if (!callId) return;
+  try {
+    const r = await fetch('/api/demo/calls/' + callId);
+    if (!r.ok) return;
+    const c = await r.json();
+    if (c.ended_at) {
+      clearInterval(poller); poller = null;
+      badge.textContent = 'Final'; badge.className = 'badge final';
+      render(c, true);
+    } else {
+      render(c, false);
+      if (!ws && !watching && ++finalTries > 40) { clearInterval(poller); poller = null; badge.textContent = 'Not saved'; badge.className = 'badge'; }
+    }
+  } catch (e) { /* server busy: next tick */ }
+}
+
+const WORKLETS = `
+class Mic extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(320); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0][0]; if (!ch) return true;
+    let peak = 0;
+    for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i])); peak = Math.max(peak, Math.abs(s));
+      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (this.n === this.buf.length) { this.port.postMessage({pcm: this.buf.buffer.slice(0), peak}); this.n = 0; }
+    }
+    return true;
+  }
+}
+class Player extends AudioWorkletProcessor {
+  constructor() {
+    super(); this.q = []; this.cur = null; this.pos = 0;
+    this.port.onmessage = e => {
+      if (e.data === 'clear') { this.q = []; this.cur = null; return; }
+      const i16 = new Int16Array(e.data), f = new Float32Array(i16.length);
+      for (let i = 0; i < i16.length; i++) f[i] = i16[i] / 0x8000;
+      this.q.push(f);
+    };
+  }
+  process(_, outputs) {
+    const out = outputs[0][0];
+    for (let i = 0; i < out.length; i++) {
+      if (!this.cur || this.pos >= this.cur.length) { this.cur = this.q.shift() || null; this.pos = 0; }
+      out[i] = this.cur ? this.cur[this.pos++] : 0;
+    }
+    this.port.postMessage(this.q.length + (this.cur ? 1 : 0));
+    return true;
+  }
+}
+registerProcessor('mic', Mic); registerProcessor('player', Player);`;
+
+function say(role, text) {
+  const filler = text.endsWith(' [filler]');
+  const d = document.createElement('div'); d.className = 'msg ' + role + (filler ? ' filler' : ''); d.textContent = filler ? text.slice(0, -9) : text;
+  logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+}
+function setStatus(t) { statusEl.textContent = t; }
+
+async function start() {
+  btn.disabled = true; logEl.innerHTML = ''; ending = false; callId = null; finalTries = 0; setStatus('Connecting…');
+  kpisEl.innerHTML = '<div class="empty">Connecting…</div>'; badge.textContent = 'Live'; badge.className = 'badge live';
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1}});
+  } catch (e) { setStatus('Microphone permission is needed to call.'); btn.disabled = false; return; }
+  let queued = 0;
+  try {
+    ctx = new AudioContext({sampleRate: RATE});
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLETS], {type: 'application/javascript'})));
+    player = new AudioWorkletNode(ctx, 'player'); player.connect(ctx.destination);
+    player.port.onmessage = e => { queued = e.data; if (ending && queued === 0) hangUp('Call ended by agent'); };
+    mic = new AudioWorkletNode(ctx, 'mic'); ctx.createMediaStreamSource(stream).connect(mic);
+  } catch (e) {
+    hangUp('This browser can\'t run the call. Please open ' + location.href + ' in Chrome or Edge.');
+    return;
+  }
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/browser?tester=demo');
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    setStatus('Connected — the agent will speak first');
+    btn.textContent = 'Hang up'; btn.className = 'hang'; btn.disabled = false;
+    mic.port.onmessage = e => { if (ws && ws.readyState === 1) ws.send(e.data.pcm); lvl.style.width = Math.min(100, e.data.peak * 140) + '%'; };
+  };
+  ws.onmessage = e => {
+    if (typeof e.data !== 'string') { player.port.postMessage(e.data, [e.data]); return; }
+    const m = JSON.parse(e.data);
+    if (m.type === 'clear') player.port.postMessage('clear');
+    else if (m.type === 'caption') say(m.role, m.text);
+    else if (m.type === 'call') { callId = m.id; if (!poller) poller = setInterval(poll, 1500); }
+    else if (m.type === 'end') { ending = true; setStatus('Agent is wrapping up…'); if (queued === 0) setTimeout(() => hangUp('Call ended by agent'), 400); }
+    else if (m.type === 'error') { setStatus(m.text); }
+  };
+  ws.onclose = () => { if (!ending) hangUp(statusEl.textContent.startsWith('Connected') ? 'Call ended' : statusEl.textContent); else if (queued === 0) hangUp('Call ended by agent'); };
+}
+
+function hangUp(msg) {
+  const wasLive = !!ws;
+  if (ws && ws.readyState <= 1) ws.close();
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx && ctx.state !== 'closed') ctx.close();
+  ws = ctx = stream = null; lvl.style.width = '0';
+  btn.textContent = 'Start call'; btn.className = ''; btn.disabled = false; setStatus(msg || 'Call ended');
+  if (wasLive && callId) {
+    badge.textContent = 'Saving…'; badge.className = 'badge';
+    if (!poller) poller = setInterval(poll, 1500);
+  }
+}
+
+btn.onclick = () => (ws ? hangUp('You hung up') : start());
+
+// /demo?call=<id> shows a call that already happened (e.g. to revisit one after the demo).
+const params = new URLSearchParams(location.search), shown = params.get('call');
+if (shown) { callId = shown; badge.textContent = 'Loading…'; poller = setInterval(poll, 1500); poll(); }
+
+// /demo?watch=1 is the presenter's screen: it follows whoever is calling (e.g. a client on the share
+// link) and shows their transcript live next to the KPIs. Asks for the dashboard password once.
+if (params.get('watch')) {
+  document.querySelector('h1').textContent = 'DOT voice agent: live call';
+  document.querySelector('p.sub').textContent = 'Following the latest call as it happens. The KPIs fill in on the right.';
+  btn.hidden = true; document.querySelector('.meter').hidden = true; setStatus('Waiting for someone to call…');
+  let following = null, seen = 0;
+  async function follow() {
+    try {
+      const r = await fetch('/api/demo/latest');
+      if (!r.ok) { setStatus('Sign in with the dashboard password to watch (reload the page).'); return; }
+      const latest = await r.json();
+      if (!latest.id) return;
+      if (latest.id !== following) {
+        // Only start following calls that begin after this page was opened.
+        if (following === null && latest.ended) { following = latest.id; seen = latest.transcript.length; return; }
+        following = latest.id; seen = 0; logEl.innerHTML = ''; callId = latest.id; finalTries = 0;
+        badge.textContent = 'Live'; badge.className = 'badge live';
+        if (!poller) poller = setInterval(poll, 1500);
+      }
+      latest.transcript.slice(seen).forEach(m => say(m.role, m.text));
+      seen = latest.transcript.length;
+      setStatus(latest.ended ? 'Call ended' : 'Call in progress');
+    } catch (e) { /* next tick */ }
+  }
+  follow(); setInterval(follow, 1500);
+}
+</script>
+</body>
+</html>

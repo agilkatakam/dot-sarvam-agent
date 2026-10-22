@@ -260,3 +260,24 @@ def test_spelled_emails_are_stored_as_addresses():
     assert normalize_email("a-k-h-i-l-one-two-seven@gmail.com") == "akhil127@gmail.com"
     assert normalize_email("meera.iyer@svec.edu.in") == "meera.iyer@svec.edu.in"
     assert normalize_email("mary-jane@school.in") == "mary-jane@school.in"
+
+
+def test_demo_endpoint_returns_one_calls_kpis_without_a_password():
+    from fastapi.testclient import TestClient
+
+    from agent.server import app
+
+    db.insert_call("demo-1", "browser", None, "demo")
+    db.update_call("demo-1", connected_at=db.now(), ended_at=db.now(), end_reason="agent_hangup", agent_outcome="initial_discussion",
+                   next_step="asked_for_email", contact_email="a@b.in", cost_inr=1.5,
+                   transcript=[{"role": "agent", "text": "Hi"}, {"role": "user", "text": "Email me"}])
+    db.insert_turn("demo-1", "response", 1400, stt_ms=700, llm_ms=300, tts_ms=300)
+    client = TestClient(app)
+    r = client.get("/api/demo/calls/demo-1")
+    assert r.status_code == 200
+    c = r.json()
+    assert c["final_outcome"] == "initial_discussion" and c["contact_email"] == "a@b.in" and c["user_turns"] == 1
+    assert c["turns"] == [{"kind": "response", "latency_ms": 1400, "stt_ms": 700, "llm_ms": 300, "tts_ms": 300}]
+    assert "transcript" not in c  # KPIs only
+    assert client.get("/api/demo/calls/nope").status_code == 404
+    assert client.get("/demo").status_code == 200

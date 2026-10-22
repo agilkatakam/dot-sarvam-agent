@@ -107,6 +107,44 @@ async def call_page():
     return FileResponse(STATIC / "call.html")
 
 
+@app.get("/demo")
+async def demo_page():
+    return FileResponse(STATIC / "demo.html")
+
+
+DEMO_FIELDS = (
+    "end_reason", "agent_outcome", "next_step", "outcome_source", "persona", "interest_level", "seriousness",
+    "contact_name", "contact_title", "institution", "contact_email", "meeting_time", "callback_time", "opted_out",
+    "summary", "duration_secs", "cost_inr", "llm_in_tokens", "llm_out_tokens", "tts_chars", "filler_count",
+    "llm_model", "prompt_version", "started_at", "connected_at", "ended_at",
+)
+
+
+@app.get("/api/demo/latest")
+async def api_demo_latest(_user: str = Depends(_auth)):
+    """For the presenter's watch view: the newest call and its transcript so far (password protected,
+    since through a share link anyone could otherwise read whoever called last)."""
+    calls = db.all_calls()
+    if not calls:
+        return {"id": None}
+    call = db.get_call(calls[0]["id"])
+    return {"id": call["id"], "transcript": call.get("transcript") or [], "ended": bool(call.get("ended_at"))}
+
+
+@app.get("/api/demo/calls/{call_id}")
+async def api_demo_call(call_id: str):
+    """One call's KPIs for the demo page, live while it runs and complete once ended_at is set.
+    No password: only the page that placed the call knows its id (a random UUID)."""
+    call = db.get_call(call_id)
+    if call is None:
+        raise HTTPException(404)
+    out = {k: call.get(k) for k in DEMO_FIELDS}
+    out["final_outcome"] = kpis.final_outcome(call)
+    out["turns"] = [{k: t.get(k) for k in ("kind", "latency_ms", "stt_ms", "llm_ms", "tts_ms")} for t in call["turns"]]
+    out["user_turns"] = sum(1 for m in call.get("transcript") or [] if m.get("role") == "user")
+    return out
+
+
 @app.websocket("/ws/browser")
 async def browser_ws(ws: WebSocket):
     await ws.accept()
