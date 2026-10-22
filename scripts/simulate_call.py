@@ -74,6 +74,25 @@ SCENARIOS = {
                 "placement officer. If they ask for your role again, say a little irritated that you already told them. "
                 "Agree to a walkthrough on a weekday morning next week and give your email.",
     },
+    "hindi_meeting_first": {
+        "expected": "meeting_booked",
+        "voice": "rahul",
+        "language": "hi-IN",
+        "who": "Akhil Sharma, who looks after a bit of everything (admin and student activities) at DPS school. "
+               "Your email is akhil127@gmail.com.",
+        "goal": "Speak only in Hindi, written in Devanagari, like on a phone call. Right after the agent says why "
+                "it's calling, say something like 'ठीक है, meeting book करते हैं, आ जाइए'. If it asks things before "
+                "offering a time, answer briefly but sound a little impatient. Take a weekday afternoon next week. "
+                "Give your email when asked.",
+    },
+    "hangs_up_midway": {
+        "expected": "initial_discussion",
+        "voice": "priya",
+        "max_turns": 2,
+        "who": "Ms. Ritu Kapoor, Head of Department, Commerce, at a college in Delhi.",
+        "goal": "Introduce yourself with your name and role, say it sounds interesting, then say you have to go into "
+                "a class right now.",
+    },
     "joker": {
         "expected": "polite_decline",
         "voice": "aditya",
@@ -170,7 +189,7 @@ async def run_scenario(name: str, url: str, label: bool, max_turns: int) -> dict
 
         tasks = [asyncio.create_task(receive()), asyncio.create_task(send())]
         try:
-            for _ in range(max_turns):
+            for _ in range(s.get("max_turns", max_turns)):  # a scenario can hang up early
                 # Wait for the agent to finish its turn.
                 while not state["ended"] and (not state["got_audio"] or time.monotonic() - state["last_audio"] < AGENT_DONE_AFTER):
                     await asyncio.sleep(0.1)

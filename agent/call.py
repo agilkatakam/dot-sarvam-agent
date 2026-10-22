@@ -28,7 +28,9 @@ from pipecat.frames.frames import (
     OutputTransportMessageUrgentFrame,
     TTSSpeakFrame,
     TTSUpdateSettingsFrame,
+    LLMUpdateSettingsFrame,
     TranscriptionFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.metrics.metrics import LLMUsageMetricsData, TTSUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
@@ -41,6 +43,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.sarvam.llm import SarvamLLMService
 from pipecat.services.sarvam.stt import SarvamRealtimeSTTService
 from pipecat.services.sarvam.tts import SarvamTTSService
@@ -50,9 +53,9 @@ from pipecat.turns.user_stop import ExternalUserTurnStopStrategy, TurnAnalyzerUs
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-from agent import db, meetings, prompt, runtime
+from agent import db, meetings, prompt, runtime, wrapup
 from agent.config import settings
-from agent.tools import HANDLERS, build_tools
+from agent.tools import HANDLERS, build_tools, record_opt_out
 
 SAMPLE_RATE = 16000
 FILLERS = ("One moment.", "Okay, just a second.", "Right, give me a moment.")
@@ -118,7 +121,6 @@ class Call:
     send_captions: bool = False
     personas: list[str] = field(default_factory=list)
     usage: dict = field(default_factory=lambda: {"llm_in": 0, "llm_out": 0, "tts_chars": 0})
-    heard_language: str | None = None  # recognition's language for the latest transcript
     caption: object = None  # async (role, text) -> None; set by run_call so tools can add to the transcript
     _pending_latency: dict | None = None
 
@@ -177,9 +179,6 @@ class _CallObserver(BaseObserver):
             if not self._connected:
                 self._connected = True
                 await self._on_first()
-        elif isinstance(frame, TranscriptionFrame) and frame.id not in self._seen:
-            self._seen.add(frame.id)
-            self._call.heard_language = str(frame.language.value) if frame.language else None
         elif isinstance(frame, MetricsFrame) and frame.id not in self._seen:
             self._seen.add(frame.id)
             for m in frame.data:
@@ -190,6 +189,88 @@ class _CallObserver(BaseObserver):
                     self._call.usage["tts_chars"] += m.value or 0
 
 
+LANGUAGE_NAMES = {
+    "en-IN": ("English", "Latin"), "hi-IN": ("Hindi", "Devanagari"), "mr-IN": ("Marathi", "Devanagari"),
+    "bn-IN": ("Bengali", "Bengali"), "pa-IN": ("Punjabi", "Gurmukhi"), "gu-IN": ("Gujarati", "Gujarati"),
+    "or-IN": ("Odia", "Odia"), "ta-IN": ("Tamil", "Tamil"), "te-IN": ("Telugu", "Telugu"),
+    "kn-IN": ("Kannada", "Kannada"), "ml-IN": ("Malayalam", "Malayalam"),
+}
+
+
+def with_language(system_prompt: str, language: str) -> str:
+    """The system prompt plus an explicit note of the language the caller is speaking. The prompt's
+    general "reply in their language" rule alone was ignored in testing (Hindi in, English out)."""
+    name, script = LANGUAGE_NAMES.get(language, (language, "its own"))
+    if language == "en-IN":
+        return system_prompt + "\n\nCALL LANGUAGE NOW: English. Reply in English."
+    return system_prompt + (
+        f"\n\nCALL LANGUAGE NOW: {name}. The person is speaking {name}. Reply only in {name}, written in "
+        f"{script} script; common English words (Dot, meeting, email, placement) may stay in English letters. "
+        "Do not reply in English."
+    )
+
+
+class LanguageFollower(FrameProcessor):
+    """Sits between speech recognition and the user aggregator. When a transcript shows the caller
+    has switched language, it updates the voice and tells the model, before that transcript
+    reaches the model, so the very reply to it is already in the new language."""
+
+    def __init__(self, language: str, system_prompt: str, llm, tts):
+        super().__init__()
+        self.language = language
+        self._prompt, self._llm, self._tts = system_prompt, llm, tts
+
+    async def process_frame(self, frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
+            heard = frame.language.value if frame.language else None
+            language = reply_language(frame.text, self.language, heard)
+            if language != self.language:
+                self.language = language
+                await self.push_frame(
+                    TTSUpdateSettingsFrame(delta=SarvamTTSService.Settings(language=language), service=self._tts)
+                )
+                await self.push_frame(LLMUpdateSettingsFrame(
+                    delta=SarvamLLMService.Settings(system_instruction=with_language(self._prompt, language)),
+                    service=self._llm,
+                ))
+        await self.push_frame(frame, direction)
+
+
+class LookbackSarvamSTTService(SarvamRealtimeSTTService):
+    """Sarvam realtime STT that holds the caller's audio back by a moment under manual endpointing.
+
+    The local voice detector only notices speech ~0.2-0.3 s after it starts, and Sarvam drops
+    whatever audio came before the speech_start it is sent: "Two thirty PM" was heard as
+    "30 PM" (and a booking went to the wrong slot). Delaying the audio by more than the
+    detector's lag means speech_start always arrives before the first word. At the end of the
+    turn the held audio is sent straight away, so replies aren't any slower.
+    """
+
+    def __init__(self, *, lookback_secs: float = 0.4, **kwargs):
+        super().__init__(**kwargs)
+        self._lookback_secs = lookback_secs
+        self._held = bytearray()
+
+    async def run_stt(self, audio: bytes):
+        self._held.extend(audio)
+        keep = int(self.sample_rate * self._lookback_secs) * 2  # 16-bit mono
+        if len(self._held) <= keep:
+            yield None
+            return
+        release = bytes(self._held[: len(self._held) - keep])
+        del self._held[: len(self._held) - keep]
+        async for frame in super().run_stt(release):
+            yield frame
+
+    async def process_frame(self, frame, direction):
+        if isinstance(frame, VADUserStoppedSpeakingFrame):
+            # The parent flushes its buffer to Sarvam before sending speech_end: include the held tail.
+            self._audio_buffer.extend(self._held)
+            self._held.clear()
+        await super().process_frame(frame, direction)
+
+
 def build_services(rt: dict, system_prompt: str):
     key = settings.sarvam_api_key
     stt_settings = SarvamRealtimeSTTService.Settings(
@@ -198,13 +279,13 @@ def build_services(rt: dict, system_prompt: str):
     )
     if rt["turn_mode"] == "sarvam":
         stt_settings.silence_duration_ms = rt["stt_silence_ms"]
-    stt = SarvamRealtimeSTTService(
-        api_key=key,
-        sample_rate=SAMPLE_RATE,
-        # smart: our VAD + Smart Turn decide the end of turn and tell Sarvam to flush right away.
-        endpointing="manual" if rt["turn_mode"] == "smart" else "vad",
-        settings=stt_settings,
-    )
+    if rt["turn_mode"] == "smart":
+        # Our VAD + Smart Turn decide the end of turn and tell Sarvam to finalize right away.
+        stt = LookbackSarvamSTTService(api_key=key, sample_rate=SAMPLE_RATE, endpointing="manual", settings=stt_settings)
+    else:
+        stt = SarvamRealtimeSTTService(
+            api_key=key, sample_rate=SAMPLE_RATE, endpointing="vad", settings=stt_settings, prefix_padding_ms=300,
+        )
     llm = SarvamLLMService(
         api_key=key,
         settings=SarvamLLMService.Settings(
@@ -226,6 +307,9 @@ def build_services(rt: dict, system_prompt: str):
             model=rt["tts_model"], voice=rt["tts_voice"], language=rt["tts_language"],
             pace=rt["tts_pace"], min_buffer_size=rt["tts_min_buffer"],
         ),
+        # Sarvam occasionally takes 4-5 s to start a reply (seen after switching to Hindi); the 3 s
+        # default threw that audio away and left the line silent. The filler covers the wait.
+        stop_frame_timeout_s=8.0,
     )
     return stt, llm, tts
 
@@ -270,7 +354,7 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
     worker: PipelineWorker | None = None
     timers: dict[str, asyncio.Task] = {}
     started = {"connected": None, "client": None}
-    voice = {"language": rt["tts_language"]}
+    doc = None
 
     try:
         version, doc, system_prompt = call_prompt()
@@ -279,12 +363,13 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
         call.record.update(llm_model=rt["llm_model"], prompt_version=version, runtime_settings=rt)
 
         stt, llm, tts = build_services(rt, system_prompt)
+        follower = LanguageFollower(rt["tts_language"], system_prompt, llm, tts)
         context = LLMContext(tools=build_tools(doc))
         user_agg, assistant_agg = LLMContextAggregatorPair(context, user_params=turn_params(rt))
         recorder = AudioBufferProcessor(num_channels=2)  # left = caller, right = agent
 
         pipeline = Pipeline(
-            [transport.input(), stt, user_agg, llm, tts, transport.output(), recorder, assistant_agg]
+            [transport.input(), stt, follower, user_agg, llm, tts, transport.output(), recorder, assistant_agg]
         )
 
         latency = UserBotLatencyObserver()
@@ -357,12 +442,6 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
             call.record["idle_nudges"] = 0
             if message.content:
                 await caption("user", message.content)
-                language = reply_language(message.content, voice["language"], call.heard_language)
-                if language != voice["language"]:
-                    voice["language"] = language
-                    await worker.queue_frame(
-                        TTSUpdateSettingsFrame(delta=SarvamTTSService.Settings(language=language), service=tts)
-                    )
             if rt["filler_after_secs"] > 0 and "end_reason" not in call.record:
                 cancel_timer("filler")
                 timers["filler"] = asyncio.create_task(filler_after(rt["filler_after_secs"]))
@@ -462,6 +541,10 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
         if call.record.get("booking_id") and not call.record.get("agent_outcome"):
             # A real calendar booking is the outcome even if the caller hung up before the wrap-up.
             call.record.update(next_step="meeting_booked", agent_outcome="meeting_booked")
+        if doc and await wrapup.fill_from_transcript(
+            call.record, call.transcript, doc, call.personas, rt["llm_model"]
+        ) and call.record.get("opted_out"):
+            await asyncio.to_thread(record_opt_out, call)
         duration = time.monotonic() - started["client"] if started["client"] else 0.0
         call.record.update(
             duration_secs=round(duration, 1),

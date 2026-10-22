@@ -80,6 +80,7 @@ ADDED_COLUMNS = (
     "prompt_version INTEGER", "seriousness", "reviewed_persona", "booking_id",
     "duration_secs REAL", "llm_in_tokens INTEGER", "llm_out_tokens INTEGER", "tts_chars INTEGER",
     "cost_inr REAL", "filler_count INTEGER", "runtime_settings", "tester",
+    "outcome_source",  # agent (its end_call wrap-up) | transcript (filled in after the caller hung up)
 )
 
 

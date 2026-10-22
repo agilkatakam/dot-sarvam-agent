@@ -37,7 +37,7 @@ BOOK_MEETING = FunctionSchema(
         "contact_name": {"type": "string", "description": "Who the meeting is with."},
         "contact_title": {"type": "string", "description": "Their role, if known."},
         "institution": {"type": "string", "description": "Institution name, if known."},
-        "contact_email": {"type": "string", "description": "Their email for the calendar invite, if they gave one."},
+        "contact_email": {"type": "string", "description": "Their email for the calendar invite, if they gave one, as a normal address (akhil127@gmail.com), never spelled out."},
     },
     required=["start_iso"],
 )
@@ -57,7 +57,7 @@ def end_call_schema(personas: list[str]) -> FunctionSchema:
             "closing_line": {"type": "string", "description": "Short goodbye confirming the next step."},
             "contact_name": {"type": "string", "description": "Person's name, if given."},
             "contact_title": {"type": "string", "description": "Their title or role, if given."},
-            "contact_email": {"type": "string", "description": "Their email, if given."},
+            "contact_email": {"type": "string", "description": "Their email, if given, as a normal address (akhil127@gmail.com), never spelled out."},
             "institution": {"type": "string", "description": "Institution name, if known."},
             "persona": {"type": "string", "enum": personas, "description": "Who you ended up speaking to."},
             "interest_level": {"type": "string", "enum": INTEREST},
@@ -81,8 +81,28 @@ def tools_json(doc: dict) -> list[dict]:
     return [{"type": "function", "function": s.to_default_dict()} for s in build_tools(doc).standard_tools]
 
 
+# How models say "not given" in a contact field ("unknown" institution); stored as empty instead.
+# Not applied to persona/interest/seriousness, where "unclear" and "unknown" are real values.
+PLACEHOLDERS = {"unclear", "unknown", "none", "n/a", "na", "not provided", "not given", "not mentioned", "null"}
+CONTACT_FIELDS = ("contact_name", "contact_title", "institution", "contact_email")
+
+
+NUMBER_WORDS = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+                "six": "6", "seven": "7", "eight": "8", "nine": "9"}
+
+
 def _clean(value) -> str | None:
     return str(value).strip()[:500] if value not in (None, "") else None
+
+
+def normalize_email(value: str) -> str:
+    """Undo a read-back spelling the model sometimes stores: "a-k-h-i-l-one-two-seven@gmail.com"
+    -> "akhil127@gmail.com". Anything that isn't plainly spelled out is left as it is."""
+    local, at, domain = value.strip().partition("@")
+    tokens = [t for t in local.replace(" ", "-").split("-") if t]
+    if not at or len(tokens) < 3 or not all(len(t) == 1 or t.lower() in NUMBER_WORDS for t in tokens):
+        return value.strip()
+    return "".join(NUMBER_WORDS.get(t.lower(), t) for t in tokens).lower() + "@" + domain.strip().lower()
 
 
 def apply_end_call(record: dict, args: dict, personas: list[str] | None = None) -> str:
@@ -100,7 +120,7 @@ def apply_end_call(record: dict, args: dict, personas: list[str] | None = None) 
     record["opted_out"] = 1 if step == "opted_out" else 0
     for key in FIELDS:
         value = _clean(args.get(key))
-        if not value:
+        if not value or key in CONTACT_FIELDS and value.lower() in PLACEHOLDERS:
             continue
         if key == "persona" and personas and value not in personas:
             value = "unclear"
@@ -108,6 +128,8 @@ def apply_end_call(record: dict, args: dict, personas: list[str] | None = None) 
             continue
         if key == "seriousness" and value not in SERIOUSNESS:
             continue
+        if key == "contact_email":
+            value = normalize_email(value)
         if key == "meeting_time" and record.get("meeting_time"):
             continue  # the booked slot wins over whatever the model restates
         record[key] = value
@@ -136,11 +158,10 @@ async def check_availability(params: FunctionCallParams) -> None:
 async def book_meeting(params: FunctionCallParams) -> None:
     call = params.app_resources
     args = {k: _clean(v) for k, v in dict(params.arguments).items()}
-    for key in ("contact_name", "contact_title", "institution", "contact_email"):
-        if args.get(key):
-            call.record[key] = args[key]
-        else:
-            args[key] = call.record.get(key)
+    for key in CONTACT_FIELDS:
+        if args.get(key) and args[key].lower() not in PLACEHOLDERS:
+            call.record[key] = normalize_email(args[key]) if key == "contact_email" else args[key]
+        args[key] = call.record.get(key)  # the booking and invite use the cleaned value
     if call.record.get("booking_id"):
         await params.result_callback({"confirmed": False, "reason": "A meeting is already booked on this call. Don't book twice."})
         return
@@ -171,7 +192,7 @@ async def book_meeting(params: FunctionCallParams) -> None:
 async def end_call(params: FunctionCallParams) -> None:
     call = params.app_resources
     closing = apply_end_call(call.record, dict(params.arguments), call.personas)
-    call.record["end_reason"] = "agent_hangup"
+    call.record.update(end_reason="agent_hangup", outcome_source="agent")
     if call.record.get("opted_out"):
         await asyncio.to_thread(record_opt_out, call)
     # Tell the LLM it worked without asking it to speak again.

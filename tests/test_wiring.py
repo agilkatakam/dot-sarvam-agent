@@ -62,6 +62,11 @@ def test_unknown_persona_and_bad_enums_are_cleaned():
     apply_end_call(record, {"next_step": "not_interested", "persona": "prime_minister", "interest_level": "huge",
                             "seriousness": "very"}, PERSONAS)
     assert record["persona"] == "unclear" and "interest_level" not in record and "seriousness" not in record
+    record = {}
+    apply_end_call(record, {"next_step": "not_interested", "institution": "unknown", "contact_title": "Unclear",
+                            "interest_level": "unknown", "seriousness": "unclear"}, PERSONAS)
+    assert "institution" not in record and "contact_title" not in record
+    assert record["interest_level"] == "unknown" and record["seriousness"] == "unclear"
 
 
 def test_tools_json_shape():
@@ -161,3 +166,97 @@ def test_every_followed_language_is_a_valid_voice_language():
     for _block, code in SCRIPTS:
         assert language_to_sarvam_language(Language(code))
     assert language_to_sarvam_language(Language("mr-IN"))
+
+
+async def test_hangup_before_wrapup_still_records_kpis():
+    from types import SimpleNamespace
+
+    from agent import prompt, wrapup
+
+    args = {"next_step": "asked_for_email", "closing_line": "", "contact_name": "Akhil", "institution": "DPS",
+            "contact_email": "akhil127@gmail.com", "contact_title": "unclear", "persona": "reception_only", "interest_level": "medium",
+            "seriousness": "genuine"}
+    sent = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            sent.update(kwargs)
+            call = SimpleNamespace(function=SimpleNamespace(name="end_call", arguments=json.dumps(args)))
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=[call]))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+    transcript = [{"role": "agent", "text": "Hi, I'm calling from Dot."},
+                  {"role": "user", "text": "Save my email akhil127@gmail.com, I'm Akhil from DPS"}]
+    record = {}
+    assert await wrapup.fill_from_transcript(record, transcript, prompt.default_doc(), PERSONAS, "m", client)
+    assert record["agent_outcome"] == "initial_discussion" and record["outcome_source"] == "transcript"
+    assert record["contact_email"] == "akhil127@gmail.com" and record["institution"] == "DPS"
+    assert "contact_title" not in record  # "unclear" means not given
+    assert "PERSON: Save my email" in sent["messages"][1]["content"]
+    # The agent's own wrap-up wins, and a call where nobody spoke has nothing to fill in.
+    assert not await wrapup.fill_from_transcript({"agent_outcome": "polite_decline"}, transcript, prompt.default_doc(), PERSONAS, "m", client)
+    assert not await wrapup.fill_from_transcript({}, transcript[:1], prompt.default_doc(), PERSONAS, "m", client)
+
+
+async def test_stt_holds_audio_back_and_releases_it_at_turn_end(monkeypatch):
+    from pipecat.frames.frames import VADUserStoppedSpeakingFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.services.sarvam.stt import SarvamRealtimeSTTService
+
+    from agent.call import LookbackSarvamSTTService
+
+    sent = bytearray()
+
+    async def fake_run_stt(self, audio):
+        sent.extend(audio)
+        yield None
+
+    async def fake_process_frame(self, frame, direction):
+        sent.extend(self._audio_buffer)  # what the parent flushes before speech_end
+        self._audio_buffer.clear()
+
+    monkeypatch.setattr(SarvamRealtimeSTTService, "run_stt", fake_run_stt)
+    monkeypatch.setattr(SarvamRealtimeSTTService, "process_frame", fake_process_frame)
+    stt = LookbackSarvamSTTService(api_key="k", sample_rate=16000, endpointing="manual", lookback_secs=0.4)
+    monkeypatch.setattr(LookbackSarvamSTTService, "sample_rate", property(lambda self: 16000))
+    second = b"\x01\x00" * 16000  # 1 s of audio
+    async for _ in stt.run_stt(second):
+        pass
+    assert len(sent) == len(second) - 12800  # the last 0.4 s is held back
+    await stt.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    assert bytes(sent) == second  # and released, in order, at the end of the turn
+
+
+async def test_language_switch_reaches_voice_and_model_before_the_transcript(monkeypatch):
+    from pipecat.frames.frames import LLMUpdateSettingsFrame, TranscriptionFrame, TTSUpdateSettingsFrame
+
+    from agent.call import LanguageFollower
+
+    pushed = []
+    follower = LanguageFollower("en-IN", "PROMPT", llm=object(), tts=object())
+
+    async def capture(frame, direction=None):
+        pushed.append(frame)
+
+    monkeypatch.setattr(follower, "push_frame", capture)
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+    async def noop(self, frame, direction):
+        return None
+    monkeypatch.setattr(FrameProcessor, "process_frame", noop)
+
+    frame = TranscriptionFrame("हाँ बोलिए मैं placement officer हूँ", "u", "t")
+    await follower.process_frame(frame, FrameDirection.DOWNSTREAM)
+    assert [type(f) for f in pushed] == [TTSUpdateSettingsFrame, LLMUpdateSettingsFrame, TranscriptionFrame]
+    assert pushed[0].delta.language == "hi-IN"
+    assert "Reply only in Hindi" in pushed[1].delta.system_instruction
+    pushed.clear()
+    await follower.process_frame(TranscriptionFrame("haan", "u", "t"), FrameDirection.DOWNSTREAM)
+    assert [type(f) for f in pushed] == [TranscriptionFrame]  # no switch, just passed on
+
+
+def test_spelled_emails_are_stored_as_addresses():
+    from agent.tools import normalize_email
+
+    assert normalize_email("a-k-h-i-l-one-two-seven@gmail.com") == "akhil127@gmail.com"
+    assert normalize_email("meera.iyer@svec.edu.in") == "meera.iyer@svec.edu.in"
+    assert normalize_email("mary-jane@school.in") == "mary-jane@school.in"

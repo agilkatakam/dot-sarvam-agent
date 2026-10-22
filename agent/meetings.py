@@ -190,7 +190,7 @@ def check_availability(day_iso: str, part_of_day: str = "any") -> dict:
     return {
         "ok": True,
         "date": day.isoformat(),
-        "slots": [{"start_iso": s.isoformat(), "say": spoken(s)} for s in _spread(slots, 4)],
+        "slots": [{"start_iso": s.isoformat(), "say": spoken(s)} for s in _spread(slots, 2)],  # read out as a choice of two
     }
 
 
