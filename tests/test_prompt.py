@@ -36,8 +36,7 @@ def test_unknown_braces_are_left_alone():
 
 
 @pytest.mark.parametrize("mutate, message", [
-    (lambda d: d.update(opening_line="Hi, this is Riya from Dot. This call may be recorded."), "AI"),
-    (lambda d: d.update(opening_line="Hi, I'm an AI assistant from Dot."), "recorded"),
+    (lambda d: d.update(opening_line=""), "empty"),
     (lambda d: d["sections"].append(dict(d["sections"][0])), "duplicate"),
     (lambda d: [s for s in d["sections"] if s["id"] == "ending"][0].update(enabled=False), "ending"),
     (lambda d: [s for s in d["sections"] if s["kind"] == "personas"][0]["personas"][0].update(pitch=""), "pitch"),

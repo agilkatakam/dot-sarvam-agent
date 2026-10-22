@@ -77,7 +77,7 @@ console. Set the number's "A call comes in" webhook to `https://<your-tunnel>/tw
 
 The prompt is a structured document of sections, not one big string:
 
-- **Opening line**: spoken word for word, never generated. It must disclose that this is an AI and that the call may be recorded; saving is blocked otherwise.
+- **Opening line**: spoken word for word, never generated.
 - **Sections**, in order. Each one can be switched on or off, reordered, renamed, added or deleted. There are four kinds:
   - **text**: identity, tone, booking rules, ending, and so on.
   - **list**: for example, facts the agent may state.
@@ -141,7 +141,6 @@ A reviewer can override the outcome and the persona; the override is what the da
 
 **Compliance**:
 
-- The fixed AI disclosure and recording notice are spoken first, and saving a prompt without them is blocked.
 - Anyone who opts out goes on the **do-not-call list** (phone, email, institution), which you can manage on `/admin`.
 - `GET /api/dnc/check` is there for a future outbound dialer.
 

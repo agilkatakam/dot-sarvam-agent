@@ -17,6 +17,8 @@ import wave
 from dataclasses import dataclass, field
 
 from loguru import logger
+from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
@@ -26,6 +28,7 @@ from pipecat.frames.frames import (
     OutputTransportMessageUrgentFrame,
     TTSSpeakFrame,
     TTSUpdateSettingsFrame,
+    TranscriptionFrame,
 )
 from pipecat.metrics.metrics import LLMUsageMetricsData, TTSUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
@@ -43,7 +46,7 @@ from pipecat.services.sarvam.stt import SarvamRealtimeSTTService
 from pipecat.services.sarvam.tts import SarvamTTSService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.turns.user_start import ExternalUserTurnStartStrategy
-from pipecat.turns.user_stop import ExternalUserTurnStopStrategy
+from pipecat.turns.user_stop import ExternalUserTurnStopStrategy, TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
@@ -53,20 +56,49 @@ from agent.tools import HANDLERS, build_tools
 
 SAMPLE_RATE = 16000
 FILLERS = ("One moment.", "Okay, just a second.", "Right, give me a moment.")
-DEVANAGARI = re.compile(r"[\u0900-\u097F]")
+# Unicode block -> TTS language. With codemix/transcribe, each Indian language arrives in its own script.
+SCRIPTS = (
+    ((0x0900, 0x097F), "hi-IN"),  # Devanagari: Hindi, or Marathi when recognition says so
+    ((0x0980, 0x09FF), "bn-IN"),
+    ((0x0A00, 0x0A7F), "pa-IN"),
+    ((0x0A80, 0x0AFF), "gu-IN"),
+    ((0x0B00, 0x0B7F), "or-IN"),  # Pipecat maps or-IN to Sarvam's od-IN
+    ((0x0B80, 0x0BFF), "ta-IN"),
+    ((0x0C00, 0x0C7F), "te-IN"),
+    ((0x0C80, 0x0CFF), "kn-IN"),
+    ((0x0D00, 0x0D7F), "ml-IN"),
+)
 
 
-def reply_language(caller_text: str, current: str) -> str:
-    """The voice language for the agent's next reply, following the caller between English and Hindi.
+def _script(word: str) -> str | None:
+    for ch in word:
+        for (lo, hi), language in SCRIPTS:
+            if lo <= ord(ch) <= hi:
+                return language
+    return None
 
-    With codemix transcripts, Hindi words arrive in Devanagari and English words in Latin letters.
-    Codemix also writes the odd English phrase in Devanagari ("गो विद 3 PM"), so it takes a mostly
-    Hindi turn to switch to Hindi, and a full English sentence to switch back: a short "okay" from
-    a Hindi speaker must not flip the voice.
+
+def reply_language(caller_text: str, current: str, heard: str | None = None) -> str:
+    """The voice language for the agent's next reply, following the caller's language.
+
+    Decided from the script of the transcript rather than recognition's language guess alone:
+    codemix sometimes writes the odd English phrase in Devanagari ("गो विद 3 PM"), so it takes
+    a mostly non-English turn of two or more words to switch, and a full English sentence to
+    switch back. A short "okay" or "haan" must not flip the voice. `heard` (recognition's
+    language) only tells Marathi from Hindi, which share a script.
     """
     words = caller_text.split()
     if not words:
         return current
+    scripts = [_script(w) for w in words]
+    counts = {lang: scripts.count(lang) for lang in set(scripts) if lang}
+    if counts:
+        language, n = max(counts.items(), key=lambda kv: kv[1])
+        if n / len(words) >= 0.5 and (len(words) >= 2 or language == current):
+            return "mr-IN" if language == "hi-IN" and heard == "mr-IN" else language
+    if current != "en-IN" and scripts.count(None) / len(words) >= 0.8 and len(words) >= 4:
+        return "en-IN"
+    return current
     hindi = sum(1 for w in words if DEVANAGARI.search(w)) / len(words)
     if hindi >= 0.5:
         return "hi-IN"
@@ -86,6 +118,7 @@ class Call:
     send_captions: bool = False
     personas: list[str] = field(default_factory=list)
     usage: dict = field(default_factory=lambda: {"llm_in": 0, "llm_out": 0, "tts_chars": 0})
+    heard_language: str | None = None  # recognition's language for the latest transcript
     caption: object = None  # async (role, text) -> None; set by run_call so tools can add to the transcript
     _pending_latency: dict | None = None
 
@@ -144,6 +177,9 @@ class _CallObserver(BaseObserver):
             if not self._connected:
                 self._connected = True
                 await self._on_first()
+        elif isinstance(frame, TranscriptionFrame) and frame.id not in self._seen:
+            self._seen.add(frame.id)
+            self._call.heard_language = str(frame.language.value) if frame.language else None
         elif isinstance(frame, MetricsFrame) and frame.id not in self._seen:
             self._seen.add(frame.id)
             for m in frame.data:
@@ -199,7 +235,13 @@ def turn_params(rt: dict) -> LLMUserAggregatorParams:
     if rt["turn_mode"] == "smart":
         return LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=rt["vad_stop_secs"])),
-            user_turn_strategies=UserTurnStrategies(),  # VAD start + Smart Turn v3 stop (on-device)
+            # VAD start + Smart Turn v3 stop (on-device). Its fallback when it judges the caller
+            # unfinished is 3 s of silence, which hit half the replies in testing: capped here.
+            user_turn_strategies=UserTurnStrategies(
+                stop=[TurnAnalyzerUserTurnStopStrategy(
+                    turn_analyzer=LocalSmartTurnAnalyzerV3(params=SmartTurnParams(stop_secs=rt["turn_max_wait_secs"]))
+                )],
+            ),
             user_idle_timeout=idle,
         )
     return LLMUserAggregatorParams(
@@ -315,14 +357,12 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
             call.record["idle_nudges"] = 0
             if message.content:
                 await caption("user", message.content)
-                # Only between English and Hindi: another configured language is left alone.
-                if voice["language"] in ("en-IN", "hi-IN"):
-                    language = reply_language(message.content, voice["language"])
-                    if language != voice["language"]:
-                        voice["language"] = language
-                        await worker.queue_frame(
-                            TTSUpdateSettingsFrame(delta=SarvamTTSService.Settings(language=language), service=tts)
-                        )
+                language = reply_language(message.content, voice["language"], call.heard_language)
+                if language != voice["language"]:
+                    voice["language"] = language
+                    await worker.queue_frame(
+                        TTSUpdateSettingsFrame(delta=SarvamTTSService.Settings(language=language), service=tts)
+                    )
             if rt["filler_after_secs"] > 0 and "end_reason" not in call.record:
                 cancel_timer("filler")
                 timers["filler"] = asyncio.create_task(filler_after(rt["filler_after_secs"]))
@@ -386,7 +426,7 @@ async def run_call(transport: BaseTransport, call: Call) -> None:
             if call.send_captions:  # lets the call page / simulator link to this call's record
                 await worker.queue_frame(OutputTransportMessageUrgentFrame(message={"type": "call", "id": call.id}))
             await caption("agent", greeting)
-            # Spoken verbatim, not generated: the AI disclosure can't be skipped or reworded.
+            # Spoken verbatim, not generated, so it starts at once and is the same on every call.
             await worker.queue_frame(TTSSpeakFrame(greeting))
 
         @transport.event_handler("on_client_disconnected")

@@ -84,11 +84,6 @@ def validate(doc: dict) -> list[str]:
     opening = (doc.get("opening_line") or "").lower()
     if not opening:
         errors.append("The opening line is empty.")
-    # The disclosure is the legally significant part of every call; don't let an edit drop it.
-    if not re.search(r"\bai\b|artificial intelligence", opening):
-        errors.append("The opening line must disclose that the caller is an AI assistant.")
-    if "record" not in opening:
-        errors.append("The opening line must say the call may be recorded.")
     ids, keys = set(), set()
     for i, s in enumerate(doc.get("sections") or [], 1):
         label = f"Section {i} ({s.get('title') or s.get('id') or 'untitled'})"

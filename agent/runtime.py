@@ -45,7 +45,7 @@ FIELDS = (
     # --- language model
     Field("llm_model", "Language model", "Model", "choice", _env("SARVAM_LLM_MODEL", "sarvam-105b-conversations"),
           "sarvam-105b-conversations is tuned for dialogue. Compare others on latency in the KPI tab.",
-          choices=("sarvam-105b-conversations", "sarvam-105b", "gemma4", "glm5.2")),
+          choices=("sarvam-105b-conversations", "sarvam-105b", "gemma4")),
     Field("llm_temperature", "Language model", "Temperature", "float", _env("LLM_TEMPERATURE", 0.4),
           "Lower = more consistent and on-script; higher = more varied phrasing.", min=0, max=1.5),
     Field("llm_max_tokens", "Language model", "Max reply tokens", "int", _env("LLM_MAX_TOKENS", 500),
@@ -66,9 +66,9 @@ FIELDS = (
           "Characters of reply buffered before audio is generated. Lower = faster start, slightly less natural prosody.",
           min=10, max=200),
     # --- listening / turn-taking
-    Field("stt_language", "Listening", "Caller language", "choice", _env("SARVAM_STT_LANGUAGE", "hi-IN"),
-          "hi-IN with codemix understands English, Hindi and Hinglish callers. en-IN forces everything into English, "
-          "so Hindi speech gets mangled.", choices=STT_LANGUAGES),
+    Field("stt_language", "Listening", "Caller language", "choice", _env("SARVAM_STT_LANGUAGE", "auto"),
+          "auto detects the caller's language (English, Hindi, Tamil, Telugu...) and the agent follows it. "
+          "hi-IN is steadier for English/Hindi-only callers. en-IN forces everything into English.", choices=STT_LANGUAGES),
     Field("stt_mode", "Listening", "Transcript mode", "choice", _env("SARVAM_STT_MODE", "codemix"),
           "codemix keeps Hinglish as spoken: English words in English letters, Hindi in Devanagari.",
           choices=("transcribe", "codemix", "translit", "translate", "verbatim")),
@@ -86,6 +86,9 @@ FIELDS = (
     Field("vad_stop_secs", "Listening", "Silence before checking for end of turn (s)", "float", _env("VAD_STOP_SECS", 0.5),
           "smart mode only. Every pause this long also cuts the audio sent to speech recognition, so below ~0.4 "
           "names and emails get split mid-word and misheard.", min=0.1, max=1.5),
+    Field("turn_max_wait_secs", "Listening", "Reply anyway after silence (s)", "float", _env("TURN_MAX_WAIT_SECS", 1.0),
+          "smart mode only. When the turn model thinks the caller is mid-sentence it keeps waiting; this caps the "
+          "wait. It often misjudges Indian English, so a high value adds seconds to many replies.", min=0.5, max=3.0),
     Field("stt_silence_ms", "Listening", "Sarvam silence window (ms)", "int", _env("SARVAM_STT_SILENCE_MS", 400),
           "sarvam mode only. Lower = faster replies, more cut-ins.", min=150, max=2000),
     Field("turn_stop_wait_secs", "Listening", "Wait for late transcript (s)", "float", _env("TURN_STOP_WAIT_SECS", 0.15),

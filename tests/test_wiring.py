@@ -124,6 +124,10 @@ def test_voice_follows_caller_between_english_and_hindi():
     # codemix sometimes writes an English phrase in Devanagari; that's still an English speaker
     assert reply_language("गो विद 3 PM on Wednesday the 28th and yes my email is fine", "en-IN") == "en-IN"
     assert reply_language("हाँ ठीक है", "hi-IN") == "hi-IN"
+    assert reply_language("நான் placement officer தான்", "en-IN") == "ta-IN"
+    assert reply_language("నేను లైబ్రేరియన్ ని", "hi-IN") == "te-IN"
+    assert reply_language("मी प्लेसमेंट अधिकारी आहे", "en-IN", heard="mr-IN") == "mr-IN"
+    assert reply_language("हाँ", "en-IN") == "en-IN"  # one word could be a misdetection
 
 
 def test_services_use_the_listening_settings():
@@ -131,9 +135,29 @@ def test_services_use_the_listening_settings():
     from agent.call import build_services
 
     rt = runtime.load()
-    assert (rt["stt_language"], rt["stt_mode"], rt["stt_stream_type"]) == ("hi-IN", "codemix", "balanced")
+    assert (rt["stt_mode"], rt["stt_stream_type"]) == ("codemix", "balanced")
     stt, _llm, _tts = build_services(rt, "test prompt")
     params = stt._query_params()
     assert params["stream_type"] == "balanced" and params["mode"] == "codemix" and "Dot" in params["prompt"]
     stt, _llm, _tts = build_services({**rt, "stt_prompt": ""}, "test prompt")
     assert "prompt" not in stt._query_params()
+
+
+def test_smart_turn_wait_is_capped():
+    from agent import runtime
+    from agent.call import turn_params
+
+    params = turn_params(runtime.load())
+    [stop] = params.user_turn_strategies.stop
+    assert stop._turn_analyzer.params.stop_secs == 1.0
+
+
+def test_every_followed_language_is_a_valid_voice_language():
+    from pipecat.services.sarvam.tts import language_to_sarvam_language
+    from pipecat.transcriptions.language import Language
+
+    from agent.call import SCRIPTS
+
+    for _block, code in SCRIPTS:
+        assert language_to_sarvam_language(Language(code))
+    assert language_to_sarvam_language(Language("mr-IN"))
